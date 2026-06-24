@@ -77,10 +77,15 @@ func GeneratePKI(sans []string) (*Bundle, error) {
 		return nil, err
 	}
 
+	caCertPEM := pemEncodeCert(caCertDER)
+
+	// Server cert includes the full chain (leaf + CA) for strict TLS clients
+	serverCertChain := append(serverCert, caCertPEM...)
+
 	return &Bundle{
-		CACert:     pemEncodeCert(caCertDER),
+		CACert:     caCertPEM,
 		CAKey:      caKeyBytes,
-		ServerCert: serverCert,
+		ServerCert: serverCertChain,
 		ServerKey:  serverKey,
 		ClientCert: clientCert,
 		ClientKey:  clientKey,

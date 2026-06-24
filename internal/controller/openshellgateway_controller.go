@@ -446,18 +446,23 @@ func (r *OpenShellGatewayReconciler) reconcileCertManagerCertificate(ctx context
 
 func (r *OpenShellGatewayReconciler) reconcileSelfSignedServerTLS(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, ns string) error {
 	serverSecretName := gw.Name + "-server-tls"
+	clientSecretName := gw.Name + "-client-tls"
 	sans := computeServerSANs(gw)
 	sansHash := pki.HashSANs(sans)
 
-	existing := &corev1.Secret{}
-	err := r.Get(ctx, types.NamespacedName{Name: serverSecretName, Namespace: ns}, existing)
-	if err == nil {
-		if existing.Annotations != nil && existing.Annotations["ogo.io/pki-sans-hash"] == sansHash {
-			r.setCondition(gw, ogov1alpha1.ConditionTLSReady, metav1.ConditionTrue, "SelfSigned", "Self-signed server certificate up to date")
+	serverExists := &corev1.Secret{}
+	serverErr := r.Get(ctx, types.NamespacedName{Name: serverSecretName, Namespace: ns}, serverExists)
+	clientExists := &corev1.Secret{}
+	clientErr := r.Get(ctx, types.NamespacedName{Name: clientSecretName, Namespace: ns}, clientExists)
+
+	if serverErr == nil && clientErr == nil {
+		if serverExists.Annotations != nil && serverExists.Annotations["ogo.io/pki-sans-hash"] == sansHash {
+			r.setCondition(gw, ogov1alpha1.ConditionTLSReady, metav1.ConditionTrue, "SelfSigned", "Self-signed certificates up to date")
 			return nil
 		}
 	}
 
+	// Single CA for both server and client certs
 	bundle, err := pki.GeneratePKI(sans)
 	if err != nil {
 		return fmt.Errorf("generating PKI: %w", err)
@@ -482,37 +487,28 @@ func (r *OpenShellGatewayReconciler) reconcileSelfSignedServerTLS(ctx context.Co
 		return fmt.Errorf("creating server TLS secret: %w", err)
 	}
 
-	r.setCondition(gw, ogov1alpha1.ConditionTLSReady, metav1.ConditionTrue, "SelfSigned", "Self-signed server certificate generated")
-	return nil
-}
-
-func (r *OpenShellGatewayReconciler) reconcileClientTLS(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, ns string) error {
-	clientSecretName := gw.Name + "-client-tls"
-
-	existing := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: clientSecretName, Namespace: ns}, existing); err == nil {
-		return nil
-	}
-
-	bundle, err := pki.GeneratePKI(nil)
-	if err != nil {
-		return fmt.Errorf("generating client PKI: %w", err)
-	}
-
-	clientSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      clientSecretName,
-			Namespace: ns,
-			Labels:    gatewayLabels(gw),
-		},
-		Type: corev1.SecretTypeTLS,
-		Data: map[string][]byte{
+	clientSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: clientSecretName, Namespace: ns}}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, clientSecret, func() error {
+		clientSecret.Labels = gatewayLabels(gw)
+		clientSecret.Type = corev1.SecretTypeTLS
+		clientSecret.Data = map[string][]byte{
 			"tls.crt": bundle.ClientCert,
 			"tls.key": bundle.ClientKey,
 			"ca.crt":  bundle.CACert,
-		},
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("creating client TLS secret: %w", err)
 	}
-	return r.Create(ctx, clientSecret)
+
+	r.setCondition(gw, ogov1alpha1.ConditionTLSReady, metav1.ConditionTrue, "SelfSigned", "Self-signed certificates generated")
+	return nil
+}
+
+func (r *OpenShellGatewayReconciler) reconcileClientTLS(_ context.Context, _ *ogov1alpha1.OpenShellGateway, _ string) error {
+	// Client TLS is handled by reconcileSelfSignedServerTLS (shared CA) or externally with cert-manager
+	return nil
 }
 
 // --- JWT Keys ---
