@@ -1,0 +1,22 @@
+apiVersion: ogo.ogo.io/v1alpha1
+kind: OpenShellGateway
+metadata:
+  labels:
+    app.kubernetes.io/name: ogo
+    app.kubernetes.io/managed-by: kustomize
+  name: openshell
+spec:
+  namespace: openshell
+  image: ghcr.io/nvidia/openshell/gateway
+  replicas: 1
+  database:
+    secretName: openshell-pg-uri
+  sandbox:
+    defaultImage: quay.io/aap/carbonite:latest
+    workspaceStorageSize: "2Gi"
+    appArmorProfile: "Unconfined"
+  tls:
+    enabled: true
+  logLevel: info
+  networkPolicy:
+    enabled: true

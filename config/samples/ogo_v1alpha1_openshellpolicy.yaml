@@ -1,0 +1,31 @@
+apiVersion: ogo.ogo.io/v1alpha1
+kind: OpenShellPolicy
+metadata:
+  labels:
+    app.kubernetes.io/name: ogo
+    app.kubernetes.io/managed-by: kustomize
+  name: default-policy
+  namespace: openshell
+spec:
+  policyName: default
+  filesystem:
+    includeWorkdir: true
+    readOnly:
+      - /usr
+      - /etc
+    readWrite:
+      - /sandbox
+      - /tmp
+  network:
+    anthropic-api:
+      name: anthropic
+      endpoints:
+        - host: api.anthropic.com
+          port: 443
+          protocol: rest
+          access: read-write
+      binaries:
+        - path: /usr/bin/curl
+  process:
+    runAsUser: sandbox
+    runAsGroup: sandbox

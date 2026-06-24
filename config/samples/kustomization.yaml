@@ -1,0 +1,6 @@
+## Append samples of your project ##
+resources:
+- ogo_v1alpha1_openshellgateway.yaml
+- ogo_v1alpha1_openshellprovider.yaml
+- ogo_v1alpha1_openshellpolicy.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
