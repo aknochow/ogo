@@ -43,6 +43,9 @@ if [ -z "$GATEWAY_URL" ]; then
   fi
 fi
 
+# Remember current active gateway so we can restore it
+PREVIOUS_GW=$(openshell gateway list 2>/dev/null | grep '^\*' | awk '{print $2}' || true)
+
 echo "Registering gateway '${GATEWAY_NAME}' at ${GATEWAY_URL}..."
 openshell gateway add "$GATEWAY_URL" \
   --name "$GATEWAY_NAME" \
@@ -50,7 +53,13 @@ openshell gateway add "$GATEWAY_URL" \
   --tls-key "$CERT_DIR/tls.key" \
   --tls-ca "$CERT_DIR/ca.crt"
 
+# Restore previous active gateway (gateway add sets the new one as active)
+if [ -n "$PREVIOUS_GW" ] && [ "$PREVIOUS_GW" != "$GATEWAY_NAME" ]; then
+  openshell gateway select "$PREVIOUS_GW" >/dev/null 2>&1 || true
+  echo "Active gateway restored to '${PREVIOUS_GW}'"
+fi
+
 echo ""
-echo "Connected. Try:"
+echo "Connected. Use --gateway ${GATEWAY_NAME} to target this gateway:"
 echo "  openshell sandbox list --gateway ${GATEWAY_NAME}"
 echo "  openshell sandbox create --gateway ${GATEWAY_NAME} -- claude"
