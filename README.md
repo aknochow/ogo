@@ -1,98 +1,206 @@
-# OGO — OpenShift OpenShell Gateway Operator
+# OGO — OpenShift Gateway Operator
 
-An OpenShift-first Kubernetes operator that deploys and manages
+An OpenShift-first Kubernetes operator for deploying and managing
 [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) Gateway instances.
 
 OpenShell provides safe, policy-enforced sandboxed environments for autonomous
-AI agents. OGO automates the deployment lifecycle on OpenShift — PKI generation,
-SCC bindings, Route creation, RBAC, and status reporting — so you can run a
-persistent gateway that CI jobs and developers connect to remotely.
+AI agents. OGO automates the full deployment lifecycle on OpenShift — TLS
+certificate management, SCC bindings, Route creation, RBAC, and status
+reporting — so you can run a persistent gateway that CI jobs and developers
+connect to remotely.
+
+## Architecture
+
+```
+Cluster (OpenShift or Kubernetes)
+├── ogo namespace
+│   ├── OGO controller pod
+│   ├── OpenShellGateway CR (cluster-scoped singleton)
+│   │   └── Reconciles: Deployment, Service, Route, ConfigMap,
+│   │       TLS Secrets, JWT Keys, RBAC, SCC, NetworkPolicy
+│   ├── OpenShellProvider CRs (credential bundles)
+│   ├── OpenShellPolicy CRs (sandbox policy templates)
+│   ├── Gateway pod (NVIDIA OpenShell)
+│   └── Sandbox pods (created by the gateway at runtime)
+```
+
+**Single gateway per cluster.** Multi-tenancy is handled by OpenShell's
+built-in namespace system ([RFC #1977](https://github.com/NVIDIA/OpenShell/pull/1980)),
+not by deploying multiple gateways.
 
 ## Prerequisites
 
 - OpenShift 4.18+ (or CRC with OpenShift preset for local development)
 - Podman 4.0+
 - `oc` CLI
-- `operator-sdk` CLI
-- PostgreSQL instance (the gateway requires an external database)
-- `agents.x-k8s.io` Sandbox CRD installed on the cluster
+- PostgreSQL database (CloudNativePG recommended)
+- [Agent Sandbox CRD](https://github.com/kubernetes-sigs/agent-sandbox) installed on the cluster
 
 ## Quick Start
 
-### Build and push the operator image
+### 1. Install the Sandbox CRD
 
 ```sh
-make image-build image-push IMG=quay.io/aknochow/ogo:v0.1.0
+oc apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/manifest.yaml
 ```
 
-### Install the CRDs
-
-```sh
-make install
-```
-
-### Deploy the operator
+### 2. Deploy the operator
 
 ```sh
 make deploy IMG=quay.io/aknochow/ogo:v0.1.0
 ```
 
-### Create a gateway instance
+### 3. Create a PostgreSQL database
 
-```sh
-oc apply -f config/samples/ogo_v1alpha1_openshellgateway.yaml
+Using CloudNativePG:
+
+```yaml
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: openshell-pg
+  namespace: ogo
+spec:
+  instances: 1
+  storage:
+    size: 1Gi
+  bootstrap:
+    initdb:
+      database: openshell
+      owner: openshell
 ```
 
-### Check status
+### 4. Create the gateway
+
+```yaml
+apiVersion: gateway.ogo.io/v1alpha1
+kind: OpenShellGateway
+metadata:
+  name: openshell
+spec:
+  namespace: ogo
+  database:
+    secretName: openshell-pg-app
+  sandbox:
+    defaultImage: quay.io/aap/carbonite:latest
+  tls:
+    enabled: true
+    certManager:
+      enabled: true
+      issuerName: letsencrypt
+  route:
+    hostname: openshell.apps.example.com
+```
+
+### 5. Check status
 
 ```sh
 oc get openshellgateways
 ```
 
-### Connect remotely
+```
+NAME        PHASE     URL                                          AGE
+openshell   Running   https://openshell.apps.example.com:443       5m
+```
+
+### 6. Connect remotely
 
 ```sh
 # Extract client certificates
-oc get secret openshell-client-tls -n openshell -o jsonpath='{.data.tls\.crt}' | base64 -d > client.crt
-oc get secret openshell-client-tls -n openshell -o jsonpath='{.data.tls\.key}' | base64 -d > client.key
-oc get secret openshell-client-tls -n openshell -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+oc get secret openshell-client-tls -n ogo -o jsonpath='{.data.tls\.crt}' | base64 -d > client.crt
+oc get secret openshell-client-tls -n ogo -o jsonpath='{.data.tls\.key}' | base64 -d > client.key
+oc get secret openshell-client-tls -n ogo -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
 
-# Register the remote gateway
-openshell gateway add https://openshell.apps.<cluster-domain> \
-  --name my-cluster --tls-cert client.crt --tls-key client.key --tls-ca ca.crt
+# Register the gateway
+OPENSHELL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openshell"
+mkdir -p "$OPENSHELL_DIR/gateways/my-cluster"
+cp client.crt "$OPENSHELL_DIR/gateways/my-cluster/tls.crt"
+cp client.key "$OPENSHELL_DIR/gateways/my-cluster/tls.key"
+cp ca.crt "$OPENSHELL_DIR/gateways/my-cluster/ca.crt"
+openshell gateway add https://openshell.apps.example.com --name my-cluster --local
 
-# Create a sandbox on the remote cluster
+# Create a sandbox
 openshell sandbox create --gateway my-cluster -- claude
-```
-
-## Local Development
-
-This project uses **Podman Desktop** with the built-in **CRC extension** for
-local OpenShift development. Install Podman Desktop, enable the CRC extension
-(OpenShift preset), and you have a full OpenShift cluster for testing.
-
-### Run the operator locally (against your current cluster)
-
-```sh
-make run
-```
-
-### Run tests
-
-```sh
-make test
 ```
 
 ## CRDs
 
-| CRD | Scope | Description |
-|-----|-------|-------------|
-| `OpenShellGateway` | Cluster | Singleton — deploys and manages the OpenShell Gateway |
-| `OpenShellProvider` | Namespaced | Credential bundles for AI providers (Anthropic, GitHub, etc.) |
-| `OpenShellPolicy` | Namespaced | Sandbox policy templates (network, filesystem, process) |
+| CRD | Scope | API Group | Description |
+|-----|-------|-----------|-------------|
+| `OpenShellGateway` | Cluster | `gateway.ogo.io` | Singleton — deploys and manages the OpenShell Gateway |
+| `OpenShellProvider` | Namespaced | `gateway.ogo.io` | Credential bundles for AI providers (Anthropic, GitHub, etc.) |
+| `OpenShellPolicy` | Namespaced | `gateway.ogo.io` | Sandbox policy templates (network, filesystem, process) |
+
+## TLS Configuration
+
+OGO supports three TLS modes for the gateway server certificate:
+
+| Mode | Configuration | Use Case |
+|------|--------------|----------|
+| **cert-manager** (recommended) | `tls.certManager.enabled: true` | Production — uses your cluster's cert-manager with Let's Encrypt or other issuers |
+| **Self-signed** (default) | `tls.enabled: true` | Development — operator generates a self-signed CA, server cert, and client cert |
+| **User-provided** | `tls.serverCertSecretName: my-cert` | Bring your own certificate |
+
+Client mTLS certificates are always generated by the operator for authentication.
+
+## What OGO Manages
+
+When you create an `OpenShellGateway` CR, the operator creates and manages:
+
+| Resource | Purpose |
+|----------|---------|
+| Namespace | Gateway and sandbox pod namespace |
+| ServiceAccounts | Gateway SA + sandbox SA |
+| ClusterRole + Binding | TokenReview, node access |
+| Role + Binding | Sandbox CRD CRUD, pod/event access |
+| TLS Secrets | Server cert, client cert, CA (shared) |
+| JWT Secret | Ed25519 signing keys for sandbox tokens |
+| ConfigMap | `gateway.toml` configuration |
+| Deployment | Gateway pods |
+| Service | ClusterIP with gRPC + metrics |
+| NetworkPolicy | Restricts sandbox SSH to gateway pods |
+| Route | TLS passthrough (OpenShift only) |
+| SCC Binding | Privileged SCC for sandbox SA (OpenShift only) |
+
+## Development
+
+### Prerequisites
+
+- Go 1.24+
+- Podman
+- operator-sdk
+- Access to an OpenShift cluster
+
+### Build
+
+```sh
+make build          # Build the binary
+make test           # Run unit and integration tests
+make image-build    # Build container image (podman)
+make image-push     # Push to registry
+make deploy         # Deploy to cluster
+make undeploy       # Remove from cluster
+```
+
+### Local development with Podman Desktop
+
+Install [Podman Desktop](https://podman-desktop.io/) with the CRC extension
+(OpenShift preset) for a full local OpenShift cluster.
+
+```sh
+make run            # Run operator locally against current cluster
+```
+
+## OLMv1 Compliance
+
+OGO is designed for OLMv1 (OpenShift 4.18+ and OpenShift 5):
+
+- AllNamespaces install mode
+- No webhooks
+- No bundle-level dependencies
+- Explicit ServiceAccount with RBAC
+- File-based catalog support
 
 ## License
 
-Copyright 2026.
-
-Licensed under the Apache License, Version 2.0.
+Copyright 2026. Licensed under the Apache License, Version 2.0.

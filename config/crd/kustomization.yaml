@@ -2,9 +2,9 @@
 # since it depends on service name and namespace that are out of this kustomize package.
 # It should be run by config/default
 resources:
-- bases/ogo.ogo.io_openshellgateways.yaml
-- bases/ogo.ogo.io_openshellproviders.yaml
-- bases/ogo.ogo.io_openshellpolicies.yaml
+- bases/gateway.ogo.io_openshellgateways.yaml
+- bases/gateway.ogo.io_openshellproviders.yaml
+- bases/gateway.ogo.io_openshellpolicies.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

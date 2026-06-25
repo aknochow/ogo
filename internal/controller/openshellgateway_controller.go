@@ -27,6 +27,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -47,23 +48,23 @@ import (
 )
 
 const (
-	finalizerName  = "ogo.io/gateway-cleanup"
-	labelManagedBy = "app.kubernetes.io/managed-by"
-	labelInstance  = "app.kubernetes.io/instance"
-	labelName      = "app.kubernetes.io/name"
-	labelPartOf    = "app.kubernetes.io/part-of"
+	finalizerName   = "ogo.io/gateway-cleanup"
+	labelManagedBy  = "app.kubernetes.io/managed-by"
+	labelInstance   = "app.kubernetes.io/instance"
+	labelName       = "app.kubernetes.io/name"
+	labelPartOf     = "app.kubernetes.io/part-of"
+	requeueInterval = 60 * time.Second
 )
 
-// OpenShellGatewayReconciler reconciles the singleton OpenShellGateway object.
 type OpenShellGatewayReconciler struct {
 	client.Client
 	Scheme          *runtime.Scheme
 	DiscoveryClient discovery.DiscoveryInterface
 }
 
-// +kubebuilder:rbac:groups=ogo.ogo.io,resources=openshellgateways,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=ogo.ogo.io,resources=openshellgateways/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=ogo.ogo.io,resources=openshellgateways/finalizers,verbs=update
+// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellgateways,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellgateways/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellgateways/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services;serviceaccounts;configmaps;secrets;namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
@@ -92,19 +93,18 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 	if len(gwList.Items) > 1 {
-		r.setCondition(gw, ogov1alpha1.ConditionDegraded, metav1.ConditionTrue,
-			"MultipleGateways", "Only one OpenShellGateway is allowed per cluster")
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionDegraded, Status: metav1.ConditionTrue,
+			Reason: "MultipleGateways", Message: "Only one OpenShellGateway is allowed per cluster",
+		})
 		gw.Status.Phase = ogov1alpha1.PhaseFailed
-		_ = r.Status().Update(ctx, gw)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.Status().Update(ctx, gw)
 	}
 
-	// Handle deletion
 	if !gw.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, gw)
 	}
 
-	// Ensure finalizer
 	if !controllerutil.ContainsFinalizer(gw, finalizerName) {
 		controllerutil.AddFinalizer(gw, finalizerName)
 		if err := r.Update(ctx, gw); err != nil {
@@ -113,14 +113,12 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	gw.Status.Phase = ogov1alpha1.PhaseCreating
 	isOCP := openshift.IsOpenShift(r.DiscoveryClient)
 	ns := gatewayNamespace(gw)
 	sandboxNS := sandboxNamespace(gw)
 
 	log.Info("Reconciling OpenShellGateway", "namespace", ns, "sandbox_namespace", sandboxNS, "openshift", isOCP)
 
-	// Reconcile in dependency order
 	steps := []struct {
 		name string
 		fn   func(context.Context, *ogov1alpha1.OpenShellGateway) error
@@ -143,24 +141,22 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	for _, step := range steps {
 		if err := step.fn(ctx, gw); err != nil {
 			log.Error(err, "Reconcile step failed", "step", step.name)
-			r.setCondition(gw, ogov1alpha1.ConditionDegraded, metav1.ConditionTrue,
-				"ReconcileError", fmt.Sprintf("%s: %v", step.name, err))
-			gw.Status.Phase = ogov1alpha1.PhaseFailed
-			_ = r.Status().Update(ctx, gw)
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, step.name, err)
 		}
 	}
 
 	if isOCP {
 		if err := r.reconcileRoute(ctx, gw); err != nil {
 			log.Error(err, "Failed to reconcile Route")
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "Route", err)
 		}
 		if err := r.reconcileSCCBinding(ctx, gw); err != nil {
 			log.Error(err, "Failed to reconcile SCC binding")
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "SCCBinding", err)
 		}
 	}
 
-	return ctrl.Result{}, r.updateStatus(ctx, gw, isOCP)
+	return ctrl.Result{RequeueAfter: requeueInterval}, r.updateStatus(ctx, gw, isOCP)
 }
 
 // --- Deletion ---
@@ -174,35 +170,35 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 
 	log.Info("Cleaning up gateway resources")
 
-	clusterScopedResources := []client.Object{
+	ns := gatewayNamespace(gw)
+	sandboxNS := sandboxNamespace(gw)
+
+	clusterResources := []client.Object{
 		&rbacv1.ClusterRole{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-node-reader"}},
 		&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-node-reader"}},
 	}
 
 	if openshift.IsOpenShift(r.DiscoveryClient) {
-		clusterScopedResources = append(clusterScopedResources,
+		clusterResources = append(clusterResources,
 			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox-scc-privileged"}})
 	}
 
-	for _, obj := range clusterScopedResources {
+	for _, obj := range clusterResources {
 		if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			log.Error(err, "Failed to delete cluster resource", "resource", obj.GetName())
 		}
 	}
 
-	sandboxNS := sandboxNamespace(gw)
-	ns := gatewayNamespace(gw)
-
 	if sandboxNS != ns {
-		namespacedResources := []client.Object{
+		crossNSResources := []client.Object{
 			&corev1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox", Namespace: sandboxNS}},
 			&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox", Namespace: sandboxNS}},
 			&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox", Namespace: sandboxNS}},
 			&networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox-ssh", Namespace: sandboxNS}},
 		}
-		for _, obj := range namespacedResources {
+		for _, obj := range crossNSResources {
 			if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
-				log.Error(err, "Failed to delete namespaced resource", "resource", obj.GetName())
+				log.Error(err, "Failed to delete cross-namespace resource", "resource", obj.GetName())
 			}
 		}
 	}
@@ -214,30 +210,17 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 // --- Namespace ---
 
 func (r *OpenShellGatewayReconciler) reconcileNamespace(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
-	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: gatewayNamespace(gw)}}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
-		if ns.Labels == nil {
-			ns.Labels = map[string]string{}
-		}
-		ns.Labels[labelManagedBy] = "ogo"
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("ensuring namespace %s: %w", ns.Name, err)
-	}
-
-	sandboxNS := sandboxNamespace(gw)
-	if sandboxNS != gatewayNamespace(gw) {
-		sns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: sandboxNS}}
-		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, sns, func() error {
-			if sns.Labels == nil {
-				sns.Labels = map[string]string{}
+	for _, nsName := range uniqueNamespaces(gw) {
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: nsName}}
+		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, ns, func() error {
+			if ns.Labels == nil {
+				ns.Labels = map[string]string{}
 			}
-			sns.Labels[labelManagedBy] = "ogo"
+			ns.Labels[labelManagedBy] = "ogo"
 			return nil
 		})
 		if err != nil {
-			return fmt.Errorf("ensuring sandbox namespace %s: %w", sandboxNS, err)
+			return fmt.Errorf("ensuring namespace %s: %w", nsName, err)
 		}
 	}
 	return nil
@@ -276,16 +259,8 @@ func (r *OpenShellGatewayReconciler) reconcileClusterRole(ctx context.Context, g
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cr, func() error {
 		cr.Labels = gatewayLabels(gw)
 		cr.Rules = []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{"authentication.k8s.io"},
-				Resources: []string{"tokenreviews"},
-				Verbs:     []string{"create"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"nodes"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
+			{APIGroups: []string{"authentication.k8s.io"}, Resources: []string{"tokenreviews"}, Verbs: []string{"create"}},
+			{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get", "list", "watch"}},
 		}
 		return nil
 	})
@@ -296,44 +271,21 @@ func (r *OpenShellGatewayReconciler) reconcileClusterRoleBinding(ctx context.Con
 	crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-node-reader"}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
 		crb.Labels = gatewayLabels(gw)
-		crb.RoleRef = rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "ClusterRole",
-			Name:     gw.Name + "-node-reader",
-		}
-		crb.Subjects = []rbacv1.Subject{{
-			Kind:      "ServiceAccount",
-			Name:      gw.Name,
-			Namespace: gatewayNamespace(gw),
-		}}
+		crb.RoleRef = rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: gw.Name + "-node-reader"}
+		crb.Subjects = []rbacv1.Subject{{Kind: "ServiceAccount", Name: gw.Name, Namespace: gatewayNamespace(gw)}}
 		return nil
 	})
 	return err
 }
 
 func (r *OpenShellGatewayReconciler) reconcileRole(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
-	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{
-		Name:      gw.Name + "-sandbox",
-		Namespace: sandboxNamespace(gw),
-	}}
+	role := &rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox", Namespace: sandboxNamespace(gw)}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, role, func() error {
 		role.Labels = gatewayLabels(gw)
 		role.Rules = []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{"agents.x-k8s.io"},
-				Resources: []string{"sandboxes", "sandboxes/status"},
-				Verbs:     []string{"create", "delete", "get", "list", "patch", "update", "watch"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"events"},
-				Verbs:     []string{"get", "list", "watch"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"pods"},
-				Verbs:     []string{"get"},
-			},
+			{APIGroups: []string{"agents.x-k8s.io"}, Resources: []string{"sandboxes", "sandboxes/status"}, Verbs: []string{"create", "delete", "get", "list", "patch", "update", "watch"}},
+			{APIGroups: []string{""}, Resources: []string{"events"}, Verbs: []string{"get", "list", "watch"}},
+			{APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"get"}},
 		}
 		return nil
 	})
@@ -341,56 +293,36 @@ func (r *OpenShellGatewayReconciler) reconcileRole(ctx context.Context, gw *ogov
 }
 
 func (r *OpenShellGatewayReconciler) reconcileRoleBinding(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
-	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{
-		Name:      gw.Name + "-sandbox",
-		Namespace: sandboxNamespace(gw),
-	}}
+	rb := &rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox", Namespace: sandboxNamespace(gw)}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, rb, func() error {
 		rb.Labels = gatewayLabels(gw)
-		rb.RoleRef = rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "Role",
-			Name:     gw.Name + "-sandbox",
-		}
-		rb.Subjects = []rbacv1.Subject{{
-			Kind:      "ServiceAccount",
-			Name:      gw.Name,
-			Namespace: gatewayNamespace(gw),
-		}}
+		rb.RoleRef = rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: gw.Name + "-sandbox"}
+		rb.Subjects = []rbacv1.Subject{{Kind: "ServiceAccount", Name: gw.Name, Namespace: gatewayNamespace(gw)}}
 		return nil
 	})
 	return err
 }
 
-// --- TLS PKI ---
+// --- TLS ---
 
 func (r *OpenShellGatewayReconciler) reconcileTLS(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
 	if gw.Spec.TLS.Enabled != nil && !*gw.Spec.TLS.Enabled {
-		r.setCondition(gw, ogov1alpha1.ConditionTLSReady, metav1.ConditionTrue, "Disabled", "TLS is disabled")
 		return nil
 	}
 
-	ns := gatewayNamespace(gw)
-
-	// Client mTLS certs are always self-signed by the operator
-	if err := r.reconcileClientTLS(ctx, gw, ns); err != nil {
-		return err
-	}
-
-	// Server TLS: cert-manager (recommended) > user-provided > self-signed (fallback)
 	if gw.Spec.TLS.ServerCertSecretName != "" {
-		r.setCondition(gw, ogov1alpha1.ConditionTLSReady, metav1.ConditionTrue, "UserProvided", "Using user-provided server certificate")
 		return nil
 	}
 
 	if gw.Spec.TLS.CertManager.Enabled {
-		return r.reconcileCertManagerCertificate(ctx, gw, ns)
+		return r.reconcileCertManagerCertificate(ctx, gw)
 	}
 
-	return r.reconcileSelfSignedServerTLS(ctx, gw, ns)
+	return r.reconcileSelfSignedTLS(ctx, gw)
 }
 
-func (r *OpenShellGatewayReconciler) reconcileCertManagerCertificate(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, ns string) error {
+func (r *OpenShellGatewayReconciler) reconcileCertManagerCertificate(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	ns := gatewayNamespace(gw)
 	issuerName := gw.Spec.TLS.CertManager.IssuerName
 	if issuerName == "" {
 		issuerName = "letsencrypt"
@@ -400,114 +332,84 @@ func (r *OpenShellGatewayReconciler) reconcileCertManagerCertificate(ctx context
 		issuerKind = "ClusterIssuer"
 	}
 
-	// cert-manager only gets public DNS names (Let's Encrypt rejects internal names)
-	var publicSANs []string
-	if gw.Spec.Route.Hostname != "" {
-		publicSANs = append(publicSANs, gw.Spec.Route.Hostname)
-	} else {
-		return fmt.Errorf("cert-manager requires route.hostname to be set for public certificate issuance")
+	if gw.Spec.Route.Hostname == "" {
+		return fmt.Errorf("cert-manager requires route.hostname for public certificate issuance")
 	}
-
-	cert := &unstructured.Unstructured{}
-	cert.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "cert-manager.io", Version: "v1", Kind: "Certificate",
-	})
 
 	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "cert-manager.io", Version: "v1", Kind: "Certificate",
-	})
+	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
 	err := r.Get(ctx, types.NamespacedName{Name: gw.Name + "-server-tls", Namespace: ns}, existing)
-	if apierrors.IsNotFound(err) {
-		cert.SetName(gw.Name + "-server-tls")
-		cert.SetNamespace(ns)
-		cert.SetLabels(gatewayLabels(gw))
-		cert.Object["spec"] = map[string]interface{}{
-			"secretName": gw.Name + "-server-tls",
-			"issuerRef": map[string]interface{}{
-				"name": issuerName,
-				"kind": issuerKind,
-			},
-			"dnsNames": publicSANs,
-		}
-		if err := r.Create(ctx, cert); err != nil {
-			return fmt.Errorf("creating cert-manager Certificate: %w", err)
-		}
-		r.setCondition(gw, ogov1alpha1.ConditionTLSReady, metav1.ConditionTrue, "CertManagerPending", "cert-manager Certificate created, waiting for issuance")
+	if err == nil {
 		return nil
 	}
-	if err != nil {
+	if !apierrors.IsNotFound(err) {
+		_, discoveryErr := r.DiscoveryClient.ServerResourcesForGroupVersion("cert-manager.io/v1")
+		if discoveryErr != nil {
+			return fmt.Errorf("cert-manager CRDs not installed on cluster")
+		}
 		return err
 	}
 
-	r.setCondition(gw, ogov1alpha1.ConditionTLSReady, metav1.ConditionTrue, "CertManager", "Server certificate managed by cert-manager")
-	return nil
+	cert := &unstructured.Unstructured{}
+	cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	cert.SetName(gw.Name + "-server-tls")
+	cert.SetNamespace(ns)
+	cert.SetLabels(gatewayLabels(gw))
+	cert.Object["spec"] = map[string]interface{}{
+		"secretName": gw.Name + "-server-tls",
+		"issuerRef":  map[string]interface{}{"name": issuerName, "kind": issuerKind},
+		"dnsNames":   []interface{}{gw.Spec.Route.Hostname},
+	}
+	return r.Create(ctx, cert)
 }
 
-func (r *OpenShellGatewayReconciler) reconcileSelfSignedServerTLS(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, ns string) error {
+func (r *OpenShellGatewayReconciler) reconcileSelfSignedTLS(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	ns := gatewayNamespace(gw)
 	serverSecretName := gw.Name + "-server-tls"
 	clientSecretName := gw.Name + "-client-tls"
 	sans := computeServerSANs(gw)
 	sansHash := pki.HashSANs(sans)
 
-	serverExists := &corev1.Secret{}
-	serverErr := r.Get(ctx, types.NamespacedName{Name: serverSecretName, Namespace: ns}, serverExists)
-	clientExists := &corev1.Secret{}
-	clientErr := r.Get(ctx, types.NamespacedName{Name: clientSecretName, Namespace: ns}, clientExists)
+	serverSecret := &corev1.Secret{}
+	serverErr := r.Get(ctx, types.NamespacedName{Name: serverSecretName, Namespace: ns}, serverSecret)
+	clientSecret := &corev1.Secret{}
+	clientErr := r.Get(ctx, types.NamespacedName{Name: clientSecretName, Namespace: ns}, clientSecret)
 
 	if serverErr == nil && clientErr == nil {
-		if serverExists.Annotations != nil && serverExists.Annotations["ogo.io/pki-sans-hash"] == sansHash {
-			r.setCondition(gw, ogov1alpha1.ConditionTLSReady, metav1.ConditionTrue, "SelfSigned", "Self-signed certificates up to date")
+		if serverSecret.Annotations != nil && serverSecret.Annotations["ogo.io/pki-sans-hash"] == sansHash {
 			return nil
 		}
 	}
 
-	// Single CA for both server and client certs
 	bundle, err := pki.GeneratePKI(sans)
 	if err != nil {
 		return fmt.Errorf("generating PKI: %w", err)
 	}
 
-	serverSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: serverSecretName, Namespace: ns}}
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, serverSecret, func() error {
-		serverSecret.Labels = gatewayLabels(gw)
-		if serverSecret.Annotations == nil {
-			serverSecret.Annotations = map[string]string{}
+	server := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: serverSecretName, Namespace: ns}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, server, func() error {
+		server.Labels = gatewayLabels(gw)
+		if server.Annotations == nil {
+			server.Annotations = map[string]string{}
 		}
-		serverSecret.Annotations["ogo.io/pki-sans-hash"] = sansHash
-		serverSecret.Type = corev1.SecretTypeTLS
-		serverSecret.Data = map[string][]byte{
-			"tls.crt": bundle.ServerCert,
-			"tls.key": bundle.ServerKey,
-			"ca.crt":  bundle.CACert,
-		}
+		server.Annotations["ogo.io/pki-sans-hash"] = sansHash
+		server.Type = corev1.SecretTypeTLS
+		server.Data = map[string][]byte{"tls.crt": bundle.ServerCert, "tls.key": bundle.ServerKey, "ca.crt": bundle.CACert}
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("creating server TLS secret: %w", err)
 	}
 
-	clientSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: clientSecretName, Namespace: ns}}
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, clientSecret, func() error {
-		clientSecret.Labels = gatewayLabels(gw)
-		clientSecret.Type = corev1.SecretTypeTLS
-		clientSecret.Data = map[string][]byte{
-			"tls.crt": bundle.ClientCert,
-			"tls.key": bundle.ClientKey,
-			"ca.crt":  bundle.CACert,
-		}
+	client := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: clientSecretName, Namespace: ns}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, client, func() error {
+		client.Labels = gatewayLabels(gw)
+		client.Type = corev1.SecretTypeTLS
+		client.Data = map[string][]byte{"tls.crt": bundle.ClientCert, "tls.key": bundle.ClientKey, "ca.crt": bundle.CACert}
 		return nil
-	})
-	if err != nil {
+	}); err != nil {
 		return fmt.Errorf("creating client TLS secret: %w", err)
 	}
 
-	r.setCondition(gw, ogov1alpha1.ConditionTLSReady, metav1.ConditionTrue, "SelfSigned", "Self-signed certificates generated")
-	return nil
-}
-
-func (r *OpenShellGatewayReconciler) reconcileClientTLS(_ context.Context, _ *ogov1alpha1.OpenShellGateway, _ string) error {
-	// Client TLS is handled by reconcileSelfSignedServerTLS (shared CA) or externally with cert-manager
 	return nil
 }
 
@@ -528,17 +430,9 @@ func (r *OpenShellGatewayReconciler) reconcileJWTKeys(ctx context.Context, gw *o
 	}
 
 	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: ns,
-			Labels:    gatewayLabels(gw),
-		},
-		Type: corev1.SecretTypeOpaque,
-		Data: map[string][]byte{
-			"signing.pem": keys.SigningKey,
-			"public.pem":  keys.PublicKey,
-			"kid":         []byte(keys.KID),
-		},
+		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns, Labels: gatewayLabels(gw)},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{"signing.pem": keys.SigningKey, "public.pem": keys.PublicKey, "kid": []byte(keys.KID)},
 	}
 	return r.Create(ctx, secret)
 }
@@ -622,6 +516,14 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 				{Name: "gateway-config", MountPath: "/etc/openshell", ReadOnly: true},
 				{Name: "sandbox-jwt", MountPath: "/etc/openshell-jwt", ReadOnly: true},
 			},
+			SecurityContext: &corev1.SecurityContext{
+				AllowPrivilegeEscalation: ptr.To(false),
+				Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+			},
+		}
+
+		if !isOCP {
+			container.SecurityContext.RunAsNonRoot = ptr.To(true)
 		}
 
 		if tlsEnabled {
@@ -631,26 +533,12 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 			)
 		}
 
-		containerSC := &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(false),
-			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-		}
-		if !isOCP {
-			containerSC.RunAsNonRoot = ptr.To(true)
-		}
-		container.SecurityContext = containerSC
-
 		volumes := []corev1.Volume{
 			{Name: "gateway-config", VolumeSource: corev1.VolumeSource{
-				ConfigMap: &corev1.ConfigMapVolumeSource{
-					LocalObjectReference: corev1.LocalObjectReference{Name: gw.Name + "-config"},
-				},
+				ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: gw.Name + "-config"}},
 			}},
 			{Name: "sandbox-jwt", VolumeSource: corev1.VolumeSource{
-				Secret: &corev1.SecretVolumeSource{
-					SecretName:  gw.Name + "-jwt-keys",
-					DefaultMode: ptr.To(int32(0400)),
-				},
+				Secret: &corev1.SecretVolumeSource{SecretName: gw.Name + "-jwt-keys", DefaultMode: ptr.To(int32(0400))},
 			}},
 		}
 
@@ -659,7 +547,6 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 			if gw.Spec.TLS.ServerCertSecretName != "" {
 				serverSecretName = gw.Spec.TLS.ServerCertSecretName
 			}
-			// Client CA comes from the client TLS secret (self-signed, always has ca.crt)
 			clientCASecretName := gw.Name + "-client-tls"
 			volumes = append(volumes,
 				corev1.Volume{Name: "tls-cert", VolumeSource: corev1.VolumeSource{
@@ -683,17 +570,14 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 
 		if !isOCP {
 			podSpec.SecurityContext = &corev1.PodSecurityContext{
-				FSGroup:   ptr.To(int64(1000)),
-				RunAsUser: ptr.To(int64(1000)),
+				FSGroup: ptr.To(int64(1000)), RunAsUser: ptr.To(int64(1000)),
 			}
 		}
 
 		deploy.Spec.Template = corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
-				Labels: labels,
-				Annotations: map[string]string{
-					"ogo.io/config-hash": configHash,
-				},
+				Labels:      labels,
+				Annotations: map[string]string{"ogo.io/config-hash": configHash},
 			},
 			Spec: podSpec,
 		}
@@ -728,30 +612,18 @@ func (r *OpenShellGatewayReconciler) reconcileNetworkPolicy(ctx context.Context,
 		return nil
 	}
 
-	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{
-		Name:      gw.Name + "-sandbox-ssh",
-		Namespace: sandboxNamespace(gw),
-	}}
+	np := &networkingv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox-ssh", Namespace: sandboxNamespace(gw)}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, np, func() error {
 		np.Labels = gatewayLabels(gw)
 		np.Spec = networkingv1.NetworkPolicySpec{
-			PodSelector: metav1.LabelSelector{
-				MatchLabels: map[string]string{"openshell.ai/managed-by": "openshell"},
-			},
+			PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"openshell.ai/managed-by": "openshell"}},
 			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeIngress},
 			Ingress: []networkingv1.NetworkPolicyIngressRule{{
 				From: []networkingv1.NetworkPolicyPeer{{
-					NamespaceSelector: &metav1.LabelSelector{
-						MatchLabels: map[string]string{"kubernetes.io/metadata.name": gatewayNamespace(gw)},
-					},
-					PodSelector: &metav1.LabelSelector{
-						MatchLabels: selectorLabels(gw),
-					},
+					NamespaceSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"kubernetes.io/metadata.name": gatewayNamespace(gw)}},
+					PodSelector:       &metav1.LabelSelector{MatchLabels: selectorLabels(gw)},
 				}},
-				Ports: []networkingv1.NetworkPolicyPort{{
-					Protocol: ptr.To(corev1.ProtocolTCP),
-					Port:     ptr.To(intstr.FromInt32(2222)),
-				}},
+				Ports: []networkingv1.NetworkPolicyPort{{Protocol: ptr.To(corev1.ProtocolTCP), Port: ptr.To(intstr.FromInt32(2222))}},
 			}},
 		}
 		return nil
@@ -767,33 +639,21 @@ func (r *OpenShellGatewayReconciler) reconcileRoute(ctx context.Context, gw *ogo
 	}
 
 	ns := gatewayNamespace(gw)
-	route := &unstructured.Unstructured{}
-	route.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "route.openshift.io", Version: "v1", Kind: "Route",
-	})
-
 	spec := map[string]interface{}{
-		"to": map[string]interface{}{
-			"kind": "Service",
-			"name": gw.Name,
-		},
-		"port": map[string]interface{}{
-			"targetPort": "grpc",
-		},
-		"tls": map[string]interface{}{
-			"termination": "passthrough",
-		},
+		"to":   map[string]interface{}{"kind": "Service", "name": gw.Name},
+		"port": map[string]interface{}{"targetPort": "grpc"},
+		"tls":  map[string]interface{}{"termination": "passthrough"},
 	}
 	if gw.Spec.Route.Hostname != "" {
 		spec["host"] = gw.Spec.Route.Hostname
 	}
 
 	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "route.openshift.io", Version: "v1", Kind: "Route",
-	})
+	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
 	err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, existing)
 	if apierrors.IsNotFound(err) {
+		route := &unstructured.Unstructured{}
+		route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
 		route.SetName(gw.Name)
 		route.SetNamespace(ns)
 		route.SetLabels(gatewayLabels(gw))
@@ -804,13 +664,13 @@ func (r *OpenShellGatewayReconciler) reconcileRoute(ctx context.Context, gw *ogo
 		return err
 	}
 
-	// Host is immutable on existing Routes — delete and recreate if changed
 	existingHost, _, _ := unstructured.NestedString(existing.Object, "spec", "host")
-	desiredHost := gw.Spec.Route.Hostname
-	if desiredHost != "" && existingHost != desiredHost {
+	if gw.Spec.Route.Hostname != "" && existingHost != gw.Spec.Route.Hostname {
 		if err := r.Delete(ctx, existing); err != nil {
 			return fmt.Errorf("deleting route for hostname change: %w", err)
 		}
+		route := &unstructured.Unstructured{}
+		route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
 		route.SetName(gw.Name)
 		route.SetNamespace(ns)
 		route.SetLabels(gatewayLabels(gw))
@@ -827,16 +687,8 @@ func (r *OpenShellGatewayReconciler) reconcileSCCBinding(ctx context.Context, gw
 	crb := &rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox-scc-privileged"}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, crb, func() error {
 		crb.Labels = gatewayLabels(gw)
-		crb.RoleRef = rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "ClusterRole",
-			Name:     "system:openshift:scc:privileged",
-		}
-		crb.Subjects = []rbacv1.Subject{{
-			Kind:      "ServiceAccount",
-			Name:      gw.Name + "-sandbox",
-			Namespace: sandboxNamespace(gw),
-		}}
+		crb.RoleRef = rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "ClusterRole", Name: "system:openshift:scc:privileged"}
+		crb.Subjects = []rbacv1.Subject{{Kind: "ServiceAccount", Name: gw.Name + "-sandbox", Namespace: sandboxNamespace(gw)}}
 		return nil
 	})
 	return err
@@ -845,45 +697,79 @@ func (r *OpenShellGatewayReconciler) reconcileSCCBinding(ctx context.Context, gw
 // --- Status ---
 
 func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, isOCP bool) error {
+	// Re-fetch to avoid conflicts from earlier mutations
+	latest := &ogov1alpha1.OpenShellGateway{}
+	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name}, latest); err != nil {
+		return err
+	}
+
 	ns := gatewayNamespace(gw)
 
 	deploy := &appsv1.Deployment{}
 	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, deploy); err != nil {
-		gw.Status.Phase = ogov1alpha1.PhaseFailed
-		r.setCondition(gw, ogov1alpha1.ConditionAvailable, metav1.ConditionFalse, "DeploymentNotFound", "Gateway deployment not found")
-		return r.Status().Update(ctx, gw)
+		latest.Status.Phase = ogov1alpha1.PhaseFailed
+		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionFalse,
+			Reason: "DeploymentNotFound", Message: "Gateway deployment not found",
+		})
+		return r.Status().Update(ctx, latest)
 	}
 
 	if deploy.Status.ReadyReplicas > 0 && deploy.Status.ReadyReplicas == *deploy.Spec.Replicas {
-		gw.Status.Phase = ogov1alpha1.PhaseRunning
-		r.setCondition(gw, ogov1alpha1.ConditionAvailable, metav1.ConditionTrue, "Ready", "Gateway is running")
-		r.setCondition(gw, ogov1alpha1.ConditionProgressing, metav1.ConditionFalse, "Complete", "Rollout complete")
+		latest.Status.Phase = ogov1alpha1.PhaseRunning
+		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionTrue,
+			Reason: "Ready", Message: "Gateway is running",
+		})
+		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionProgressing, Status: metav1.ConditionFalse,
+			Reason: "Complete", Message: "Rollout complete",
+		})
 	} else {
-		gw.Status.Phase = ogov1alpha1.PhaseCreating
-		r.setCondition(gw, ogov1alpha1.ConditionAvailable, metav1.ConditionFalse, "NotReady", "Waiting for pods")
-		r.setCondition(gw, ogov1alpha1.ConditionProgressing, metav1.ConditionTrue, "Deploying", "Gateway pods starting")
+		latest.Status.Phase = ogov1alpha1.PhaseCreating
+		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionFalse,
+			Reason: "NotReady", Message: "Waiting for pods",
+		})
+		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionProgressing, Status: metav1.ConditionTrue,
+			Reason: "Deploying", Message: "Gateway pods starting",
+		})
 	}
 
-	r.setCondition(gw, ogov1alpha1.ConditionDegraded, metav1.ConditionFalse, "OK", "")
+	meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+		Type: ogov1alpha1.ConditionDegraded, Status: metav1.ConditionFalse,
+		Reason: "OK", Message: "",
+	})
 
-	// Gateway URL
-	gw.Status.GatewayURL = fmt.Sprintf("https://%s.%s.svc.cluster.local:8080", gw.Name, ns)
+	latest.Status.GatewayURL = fmt.Sprintf("https://%s.%s.svc.cluster.local:8080", gw.Name, ns)
 	if isOCP {
 		route := &unstructured.Unstructured{}
-		route.SetGroupVersionKind(schema.GroupVersionKind{
-			Group: "route.openshift.io", Version: "v1", Kind: "Route",
-		})
+		route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
 		if err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, route); err == nil {
 			if host, ok, _ := unstructured.NestedString(route.Object, "spec", "host"); ok && host != "" {
-				gw.Status.GatewayURL = "https://" + host + ":443"
+				latest.Status.GatewayURL = "https://" + host + ":443"
 			}
 		}
 	}
 
-	gw.Status.ClientCertSecretName = gw.Name + "-client-tls"
-	gw.Status.ObservedGeneration = gw.Generation
+	latest.Status.ClientCertSecretName = gw.Name + "-client-tls"
+	latest.Status.ObservedGeneration = gw.Generation
 
-	return r.Status().Update(ctx, gw)
+	return r.Status().Update(ctx, latest)
+}
+
+func (r *OpenShellGatewayReconciler) setDegraded(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, step string, reconcileErr error) error {
+	latest := &ogov1alpha1.OpenShellGateway{}
+	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name}, latest); err != nil {
+		return err
+	}
+	latest.Status.Phase = ogov1alpha1.PhaseFailed
+	meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+		Type: ogov1alpha1.ConditionDegraded, Status: metav1.ConditionTrue,
+		Reason: "ReconcileError", Message: fmt.Sprintf("%s: %v", step, reconcileErr),
+	})
+	return r.Status().Update(ctx, latest)
 }
 
 // --- Setup ---
@@ -901,7 +787,7 @@ func gatewayNamespace(gw *ogov1alpha1.OpenShellGateway) string {
 	if gw.Spec.Namespace != "" {
 		return gw.Spec.Namespace
 	}
-	return "openshell"
+	return "ogo"
 }
 
 func sandboxNamespace(gw *ogov1alpha1.OpenShellGateway) string {
@@ -911,20 +797,24 @@ func sandboxNamespace(gw *ogov1alpha1.OpenShellGateway) string {
 	return gatewayNamespace(gw)
 }
 
+func uniqueNamespaces(gw *ogov1alpha1.OpenShellGateway) []string {
+	ns := gatewayNamespace(gw)
+	sns := sandboxNamespace(gw)
+	if ns == sns {
+		return []string{ns}
+	}
+	return []string{ns, sns}
+}
+
 func gatewayLabels(gw *ogov1alpha1.OpenShellGateway) map[string]string {
 	return map[string]string{
-		labelName:      "openshell",
-		labelInstance:  gw.Name,
-		labelManagedBy: "ogo",
-		labelPartOf:    "openshell-gateway",
+		labelName: "openshell", labelInstance: gw.Name,
+		labelManagedBy: "ogo", labelPartOf: "openshell-gateway",
 	}
 }
 
 func selectorLabels(gw *ogov1alpha1.OpenShellGateway) map[string]string {
-	return map[string]string{
-		labelName:     "openshell",
-		labelInstance: gw.Name,
-	}
+	return map[string]string{labelName: "openshell", labelInstance: gw.Name}
 }
 
 func computeServerSANs(gw *ogov1alpha1.OpenShellGateway) []string {
@@ -948,24 +838,4 @@ func computeServerSANs(gw *ogov1alpha1.OpenShellGateway) []string {
 func computeConfigHash(toml string) string {
 	h := sha256.Sum256([]byte(toml))
 	return fmt.Sprintf("%x", h[:16])
-}
-
-func (r *OpenShellGatewayReconciler) setCondition(gw *ogov1alpha1.OpenShellGateway, condType string, status metav1.ConditionStatus, reason, message string) {
-	condition := metav1.Condition{
-		Type:               condType,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
-	}
-
-	for i, c := range gw.Status.Conditions {
-		if c.Type == condType {
-			if c.Status != status {
-				gw.Status.Conditions[i] = condition
-			}
-			return
-		}
-	}
-	gw.Status.Conditions = append(gw.Status.Conditions, condition)
 }

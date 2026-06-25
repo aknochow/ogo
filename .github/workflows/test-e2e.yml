@@ -1,12 +1,15 @@
 name: E2E Tests
 
+# E2E tests require an OpenShift cluster (CRC or full cluster).
+# This workflow is disabled until CI infrastructure is set up.
+# Run manually: make test-e2e against a cluster with KUBECONFIG set.
+
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
 
 jobs:
   test-e2e:
-    name: Run on Ubuntu
+    name: Run on OpenShift
     runs-on: ubuntu-latest
     steps:
       - name: Clone the code
@@ -17,16 +20,7 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Install the latest version of kind
-        run: |
-          curl -Lo ./kind https://kind.sigs.k8s.io/dl/latest/kind-linux-amd64
-          chmod +x ./kind
-          sudo mv ./kind /usr/local/bin/kind
-
-      - name: Verify kind installation
-        run: kind version
-
       - name: Running Test e2e
         run: |
-          go mod tidy
-          make test-e2e
+          echo "E2E tests require an OpenShift cluster."
+          echo "Run manually: KUBECONFIG=~/.kube/config make test-e2e"

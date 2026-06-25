@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: openshellgateways.ogo.ogo.io
+  name: openshellgateways.gateway.ogo.io
 spec:
-  group: ogo.ogo.io
+  group: gateway.ogo.io
   names:
     kind: OpenShellGateway
     listKind: OpenShellGatewayList
@@ -67,6 +67,7 @@ spec:
                     description: |-
                       SecretName references a Secret containing the PostgreSQL connection URI.
                       The Secret must have a key named "uri".
+                    minLength: 1
                     type: string
                 required:
                 - secretName
@@ -89,9 +90,12 @@ spec:
                 - error
                 type: string
               namespace:
-                default: openshell
+                default: ogo
                 description: Namespace where the gateway Deployment and associated
                   resources are created.
+                maxLength: 63
+                minLength: 1
+                pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
                 type: string
               networkPolicy:
                 description: NetworkPolicy controls whether a NetworkPolicy restricting

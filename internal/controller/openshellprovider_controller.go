@@ -44,9 +44,9 @@ type OpenShellProviderReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=ogo.ogo.io,resources=openshellproviders,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=ogo.ogo.io,resources=openshellproviders/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=ogo.ogo.io,resources=openshellproviders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellproviders,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellproviders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellproviders/finalizers,verbs=update
 
 func (r *OpenShellProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)

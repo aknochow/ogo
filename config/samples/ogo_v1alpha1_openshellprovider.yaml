@@ -1,11 +1,11 @@
-apiVersion: ogo.ogo.io/v1alpha1
+apiVersion: gateway.ogo.io/v1alpha1
 kind: OpenShellProvider
 metadata:
   labels:
     app.kubernetes.io/name: ogo
     app.kubernetes.io/managed-by: kustomize
   name: claude-code
-  namespace: openshell
+  namespace: ogo
 spec:
   providerType: claude-code
   credentials:

@@ -1,11 +1,11 @@
-apiVersion: ogo.ogo.io/v1alpha1
+apiVersion: gateway.ogo.io/v1alpha1
 kind: OpenShellPolicy
 metadata:
   labels:
     app.kubernetes.io/name: ogo
     app.kubernetes.io/managed-by: kustomize
   name: default-policy
-  namespace: openshell
+  namespace: ogo
 spec:
   policyName: default
   filesystem:

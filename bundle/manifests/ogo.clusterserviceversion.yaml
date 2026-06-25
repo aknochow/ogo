@@ -1,0 +1,430 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: |-
+      [
+        {
+          "apiVersion": "gateway.ogo.io/v1alpha1",
+          "kind": "OpenShellGateway",
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/managed-by": "kustomize",
+              "app.kubernetes.io/name": "ogo"
+            },
+            "name": "openshell"
+          },
+          "spec": {
+            "database": {
+              "secretName": "openshell-pg-uri"
+            },
+            "image": "ghcr.io/nvidia/openshell/gateway",
+            "logLevel": "info",
+            "namespace": "ogo",
+            "networkPolicy": {
+              "enabled": true
+            },
+            "replicas": 1,
+            "sandbox": {
+              "appArmorProfile": "Unconfined",
+              "defaultImage": "quay.io/aap/carbonite:latest",
+              "workspaceStorageSize": "2Gi"
+            },
+            "tls": {
+              "enabled": true
+            }
+          }
+        },
+        {
+          "apiVersion": "gateway.ogo.io/v1alpha1",
+          "kind": "OpenShellPolicy",
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/managed-by": "kustomize",
+              "app.kubernetes.io/name": "ogo"
+            },
+            "name": "default-policy",
+            "namespace": "ogo"
+          },
+          "spec": {
+            "filesystem": {
+              "includeWorkdir": true,
+              "readOnly": [
+                "/usr",
+                "/etc"
+              ],
+              "readWrite": [
+                "/sandbox",
+                "/tmp"
+              ]
+            },
+            "network": {
+              "anthropic-api": {
+                "binaries": [
+                  {
+                    "path": "/usr/bin/curl"
+                  }
+                ],
+                "endpoints": [
+                  {
+                    "access": "read-write",
+                    "host": "api.anthropic.com",
+                    "port": 443,
+                    "protocol": "rest"
+                  }
+                ],
+                "name": "anthropic"
+              }
+            },
+            "policyName": "default",
+            "process": {
+              "runAsGroup": "sandbox",
+              "runAsUser": "sandbox"
+            }
+          }
+        },
+        {
+          "apiVersion": "gateway.ogo.io/v1alpha1",
+          "kind": "OpenShellProvider",
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/managed-by": "kustomize",
+              "app.kubernetes.io/name": "ogo"
+            },
+            "name": "claude-code",
+            "namespace": "ogo"
+          },
+          "spec": {
+            "credentials": {
+              "ANTHROPIC_API_KEY": {
+                "key": "api-key",
+                "name": "anthropic-secret"
+              }
+            },
+            "providerType": "claude-code"
+          }
+        }
+      ]
+    capabilities: Basic Install
+    createdAt: "2026-06-25T14:59:42Z"
+    operators.operatorframework.io/builder: operator-sdk-v1.42.0
+    operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
+  name: ogo.v0.1.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: OpenShellGateway is a cluster-scoped singleton that manages an
+        OpenShell Gateway instance.
+      displayName: Open Shell Gateway
+      kind: OpenShellGateway
+      name: openshellgateways.gateway.ogo.io
+      version: v1alpha1
+    - description: OpenShellPolicy defines a sandbox policy template for the OpenShell
+        Gateway.
+      displayName: Open Shell Policy
+      kind: OpenShellPolicy
+      name: openshellpolicies.gateway.ogo.io
+      version: v1alpha1
+    - description: OpenShellProvider defines a credential bundle for the OpenShell
+        Gateway.
+      displayName: Open Shell Provider
+      kind: OpenShellProvider
+      name: openshellproviders.gateway.ogo.io
+      version: v1alpha1
+  description: Ogo description. TODO.
+  displayName: Ogo
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      clusterPermissions:
+      - rules:
+        - apiGroups:
+          - ""
+          resources:
+          - configmaps
+          - namespaces
+          - secrets
+          - serviceaccounts
+          - services
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - ""
+          resources:
+          - events
+          - nodes
+          verbs:
+          - get
+          - list
+          - watch
+        - apiGroups:
+          - ""
+          resources:
+          - pods
+          verbs:
+          - get
+        - apiGroups:
+          - agents.x-k8s.io
+          resources:
+          - sandboxes
+          - sandboxes/status
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - apps
+          resources:
+          - deployments
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - authentication.k8s.io
+          resources:
+          - tokenreviews
+          verbs:
+          - create
+        - apiGroups:
+          - cert-manager.io
+          resources:
+          - certificates
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - gateway.ogo.io
+          resources:
+          - openshellgateways
+          - openshellpolicies
+          - openshellproviders
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - gateway.ogo.io
+          resources:
+          - openshellgateways/finalizers
+          - openshellpolicies/finalizers
+          - openshellproviders/finalizers
+          verbs:
+          - update
+        - apiGroups:
+          - gateway.ogo.io
+          resources:
+          - openshellgateways/status
+          - openshellpolicies/status
+          - openshellproviders/status
+          verbs:
+          - get
+          - patch
+          - update
+        - apiGroups:
+          - networking.k8s.io
+          resources:
+          - networkpolicies
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - rbac.authorization.k8s.io
+          resources:
+          - clusterrolebindings
+          - clusterroles
+          - rolebindings
+          - roles
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - route.openshift.io
+          resources:
+          - routes
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - route.openshift.io
+          resources:
+          - routes/custom-host
+          verbs:
+          - create
+          - patch
+        - apiGroups:
+          - security.openshift.io
+          resources:
+          - securitycontextconstraints
+          verbs:
+          - use
+        - apiGroups:
+          - authentication.k8s.io
+          resources:
+          - tokenreviews
+          verbs:
+          - create
+        - apiGroups:
+          - authorization.k8s.io
+          resources:
+          - subjectaccessreviews
+          verbs:
+          - create
+        serviceAccountName: ogo-controller-manager
+      deployments:
+      - label:
+          app.kubernetes.io/managed-by: kustomize
+          app.kubernetes.io/name: ogo
+          control-plane: controller-manager
+        name: ogo-controller-manager
+        spec:
+          replicas: 1
+          selector:
+            matchLabels:
+              app.kubernetes.io/name: ogo
+              control-plane: controller-manager
+          strategy: {}
+          template:
+            metadata:
+              annotations:
+                kubectl.kubernetes.io/default-container: manager
+              labels:
+                app.kubernetes.io/name: ogo
+                control-plane: controller-manager
+            spec:
+              containers:
+              - args:
+                - --metrics-bind-address=:8443
+                - --leader-elect
+                - --health-probe-bind-address=:8081
+                command:
+                - /manager
+                image: quay.io/aknochow/ogo:v0.1.5
+                livenessProbe:
+                  httpGet:
+                    path: /healthz
+                    port: 8081
+                  initialDelaySeconds: 15
+                  periodSeconds: 20
+                name: manager
+                readinessProbe:
+                  httpGet:
+                    path: /readyz
+                    port: 8081
+                  initialDelaySeconds: 5
+                  periodSeconds: 10
+                resources:
+                  requests:
+                    cpu: 100m
+                    memory: 256Mi
+                securityContext:
+                  allowPrivilegeEscalation: false
+                  capabilities:
+                    drop:
+                    - ALL
+              securityContext:
+                runAsNonRoot: true
+                seccompProfile:
+                  type: RuntimeDefault
+              serviceAccountName: ogo-controller-manager
+              terminationGracePeriodSeconds: 10
+      permissions:
+      - rules:
+        - apiGroups:
+          - ""
+          resources:
+          - configmaps
+          verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+        - apiGroups:
+          - coordination.k8s.io
+          resources:
+          - leases
+          verbs:
+          - get
+          - list
+          - watch
+          - create
+          - update
+          - patch
+          - delete
+        - apiGroups:
+          - ""
+          resources:
+          - events
+          verbs:
+          - create
+          - patch
+        serviceAccountName: ogo-controller-manager
+    strategy: deployment
+  installModes:
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - ogo
+  links:
+  - name: Ogo
+    url: https://ogo.domain
+  maintainers:
+  - email: your@email.com
+    name: Maintainer Name
+  maturity: alpha
+  minKubeVersion: "1.28.0"
+  provider:
+    name: aknochow
+    url: https://github.com/aknochow/ogo
+  version: 0.1.0

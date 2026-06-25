@@ -1,4 +1,4 @@
-apiVersion: ogo.ogo.io/v1alpha1
+apiVersion: gateway.ogo.io/v1alpha1
 kind: OpenShellGateway
 metadata:
   labels:
@@ -6,7 +6,7 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: openshell
 spec:
-  namespace: openshell
+  namespace: ogo
   image: ghcr.io/nvidia/openshell/gateway
   replicas: 1
   database:

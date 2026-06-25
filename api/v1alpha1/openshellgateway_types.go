@@ -24,7 +24,10 @@ import (
 // OpenShellGatewaySpec defines the desired state of the OpenShell Gateway.
 type OpenShellGatewaySpec struct {
 	// Namespace where the gateway Deployment and associated resources are created.
-	// +kubebuilder:default="openshell"
+	// +kubebuilder:default="ogo"
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
 	Namespace string `json:"namespace,omitempty"`
 
 	// Image is the gateway container image.
@@ -75,6 +78,7 @@ type OpenShellGatewaySpec struct {
 type DatabaseSpec struct {
 	// SecretName references a Secret containing the PostgreSQL connection URI.
 	// The Secret must have a key named "uri".
+	// +kubebuilder:validation:MinLength=1
 	SecretName string `json:"secretName"`
 }
 

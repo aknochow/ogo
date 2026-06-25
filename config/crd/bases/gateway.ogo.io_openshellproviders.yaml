@@ -4,19 +4,19 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.18.0
-  name: openshellpolicies.ogo.ogo.io
+  name: openshellproviders.gateway.ogo.io
 spec:
-  group: ogo.ogo.io
+  group: gateway.ogo.io
   names:
-    kind: OpenShellPolicy
-    listKind: OpenShellPolicyList
-    plural: openshellpolicies
-    singular: openshellpolicy
+    kind: OpenShellProvider
+    listKind: OpenShellProviderList
+    plural: openshellproviders
+    singular: openshellprovider
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
-    - jsonPath: .spec.policyName
-      name: Policy
+    - jsonPath: .spec.providerType
+      name: Provider
       type: string
     - jsonPath: .status.phase
       name: Phase
@@ -27,7 +27,7 @@ spec:
     name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: OpenShellPolicy defines a sandbox policy template for the OpenShell
+        description: OpenShellProvider defines a credential bundle for the OpenShell
           Gateway.
         properties:
           apiVersion:
@@ -48,120 +48,43 @@ spec:
           metadata:
             type: object
           spec:
-            description: OpenShellPolicySpec defines a sandbox policy template for
-              the OpenShell Gateway.
+            description: OpenShellProviderSpec defines credential bundles for the
+              OpenShell Gateway.
             properties:
-              filesystem:
-                description: Filesystem defines filesystem access policies.
-                properties:
-                  includeWorkdir:
-                    description: IncludeWorkdir includes the sandbox working directory
-                      in the filesystem policy.
-                    type: boolean
-                  readOnly:
-                    description: ReadOnly paths accessible to the sandbox.
-                    items:
-                      type: string
-                    type: array
-                  readWrite:
-                    description: ReadWrite paths accessible to the sandbox.
-                    items:
-                      type: string
-                    type: array
-                type: object
-              network:
+              config:
                 additionalProperties:
-                  description: NetworkPolicyRule defines a named set of network access
-                    rules.
+                  type: string
+                description: Config holds non-secret provider configuration key-value
+                  pairs.
+                type: object
+              credentials:
+                additionalProperties:
+                  description: SecretKeyRef references a key within a Secret.
                   properties:
-                    binaries:
-                      description: Binaries defines which binaries can access these
-                        endpoints.
-                      items:
-                        description: NetworkBinary defines an allowed binary for network
-                          access.
-                        properties:
-                          path:
-                            description: Path is the absolute path to the binary.
-                            type: string
-                        required:
-                        - path
-                        type: object
-                      type: array
-                    endpoints:
-                      description: Endpoints defines allowed network endpoints.
-                      items:
-                        description: NetworkEndpoint defines an allowed network destination.
-                        properties:
-                          access:
-                            description: Access is the access shorthand (read-only,
-                              read-write, full).
-                            enum:
-                            - read-only
-                            - read-write
-                            - full
-                            type: string
-                          enforcement:
-                            default: enforce
-                            description: Enforcement is the enforcement mode (enforce
-                              or audit).
-                            enum:
-                            - enforce
-                            - audit
-                            type: string
-                          host:
-                            description: Host is the hostname or glob pattern (e.g.
-                              "*.example.com").
-                            type: string
-                          port:
-                            description: Port is the destination port.
-                            format: int32
-                            type: integer
-                          protocol:
-                            description: Protocol is the application protocol (rest,
-                              websocket, graphql, sql, or empty for L4).
-                            enum:
-                            - rest
-                            - websocket
-                            - graphql
-                            - sql
-                            - ""
-                            type: string
-                        required:
-                        - host
-                        - port
-                        type: object
-                      type: array
+                    key:
+                      description: Key within the Secret data.
+                      type: string
                     name:
-                      description: Name is the display name for this network policy
-                        rule.
+                      description: Name of the Secret.
                       type: string
                   required:
+                  - key
                   - name
                   type: object
-                description: Network defines network access policies keyed by policy
-                  name.
+                description: |-
+                  Credentials maps environment variable names to Secret key references.
+                  Each entry injects the Secret value as the named env var into sandbox pods.
                 type: object
-              policyName:
-                description: PolicyName is the name of the policy in the gateway.
+              providerType:
+                description: ProviderType is the canonical provider profile slug (e.g.
+                  "claude-code", "github", "nvidia").
                 type: string
-              process:
-                description: Process defines process execution policies.
-                properties:
-                  runAsGroup:
-                    description: RunAsGroup is the group name or GID to run sandbox
-                      processes as.
-                    type: string
-                  runAsUser:
-                    description: RunAsUser is the user name or UID to run sandbox
-                      processes as.
-                    type: string
-                type: object
             required:
-            - policyName
+            - providerType
             type: object
           status:
-            description: OpenShellPolicyStatus defines the observed state of the policy.
+            description: OpenShellProviderStatus defines the observed state of the
+              provider.
             properties:
               conditions:
                 description: Conditions represent the latest available observations.

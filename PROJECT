@@ -13,10 +13,10 @@ repo: github.com/aknochow/ogo
 resources:
 - api:
     crdVersion: v1
-    namespaced: true
+    namespaced: false
   controller: true
   domain: ogo.io
-  group: ogo
+  group: gateway
   kind: OpenShellGateway
   path: github.com/aknochow/ogo/api/v1alpha1
   version: v1alpha1
@@ -25,7 +25,7 @@ resources:
     namespaced: true
   controller: true
   domain: ogo.io
-  group: ogo
+  group: gateway
   kind: OpenShellProvider
   path: github.com/aknochow/ogo/api/v1alpha1
   version: v1alpha1
@@ -34,7 +34,7 @@ resources:
     namespaced: true
   controller: true
   domain: ogo.io
-  group: ogo
+  group: gateway
   kind: OpenShellPolicy
   path: github.com/aknochow/ogo/api/v1alpha1
   version: v1alpha1

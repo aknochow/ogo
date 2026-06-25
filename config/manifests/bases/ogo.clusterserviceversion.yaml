@@ -1,0 +1,61 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+    capabilities: Basic Install
+  name: ogo.v0.0.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: OpenShellGateway is a cluster-scoped singleton that manages an
+        OpenShell Gateway instance.
+      displayName: Open Shell Gateway
+      kind: OpenShellGateway
+      name: openshellgateways.gateway.ogo.io
+      version: v1alpha1
+    - description: OpenShellPolicy defines a sandbox policy template for the OpenShell
+        Gateway.
+      displayName: Open Shell Policy
+      kind: OpenShellPolicy
+      name: openshellpolicies.gateway.ogo.io
+      version: v1alpha1
+    - description: OpenShellProvider defines a credential bundle for the OpenShell
+        Gateway.
+      displayName: Open Shell Provider
+      kind: OpenShellProvider
+      name: openshellproviders.gateway.ogo.io
+      version: v1alpha1
+  description: Ogo description. TODO.
+  displayName: Ogo
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      deployments: null
+    strategy: ""
+  installModes:
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - ogo
+  links:
+  - name: Ogo
+    url: https://ogo.domain
+  maintainers:
+  - email: your@email.com
+    name: Maintainer Name
+  maturity: alpha
+  provider:
+    name: Provider Name
+    url: https://your.domain
+  version: 0.0.0
