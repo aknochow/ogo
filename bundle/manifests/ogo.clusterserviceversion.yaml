@@ -106,10 +106,10 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2026-06-25T14:59:42Z"
+    createdAt: "2026-06-25T18:15:53Z"
     operators.operatorframework.io/builder: operator-sdk-v1.42.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
-  name: ogo.v0.1.0
+  name: ogo.v0.1.0-20260625141551
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -341,7 +341,7 @@ spec:
                 - --health-probe-bind-address=:8081
                 command:
                 - /manager
-                image: quay.io/aknochow/ogo:v0.1.5
+                image: quay.io/aknochow/ogo:0.1.0-20260625141551
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -423,8 +423,7 @@ spec:
   - email: your@email.com
     name: Maintainer Name
   maturity: alpha
-  minKubeVersion: "1.28.0"
   provider:
     name: aknochow
     url: https://github.com/aknochow/ogo
-  version: 0.1.0
+  version: 0.1.0-20260625141551
