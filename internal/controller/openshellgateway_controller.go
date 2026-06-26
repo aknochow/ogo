@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"net"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -365,10 +366,20 @@ func (r *OpenShellGatewayReconciler) reconcileCertManagerCertificate(ctx context
 	cert.SetName(gw.Name + "-server-tls")
 	cert.SetNamespace(ns)
 	cert.SetLabels(gatewayLabels(gw))
+	// Include both public and internal SANs for the server cert.
+	// Let's Encrypt issuers will reject internal names — use a self-signed
+	// ClusterIssuer if you need both external TLS and supervisor connectivity.
+	sans := computeServerSANs(gw)
+	dnsNames := []interface{}{}
+	for _, s := range sans {
+		if net.ParseIP(s) == nil {
+			dnsNames = append(dnsNames, s)
+		}
+	}
 	cert.Object["spec"] = map[string]interface{}{
 		"secretName": gw.Name + "-server-tls",
 		"issuerRef":  map[string]interface{}{"name": issuerName, "kind": issuerKind},
-		"dnsNames":   []interface{}{gw.Spec.Route.Hostname},
+		"dnsNames":   dnsNames,
 	}
 	return r.Create(ctx, cert)
 }
@@ -700,10 +711,19 @@ func (r *OpenShellGatewayReconciler) reconcileRoute(ctx context.Context, gw *ogo
 	}
 
 	ns := gatewayNamespace(gw)
+	tlsEnabled := gw.Spec.TLS.Enabled == nil || *gw.Spec.TLS.Enabled
+	tlsTermination := "passthrough"
+	if !tlsEnabled {
+		tlsTermination = "edge"
+	}
+	tlsConfig := map[string]interface{}{"termination": tlsTermination}
+	if !tlsEnabled {
+		tlsConfig["insecureEdgeTerminationPolicy"] = "Redirect"
+	}
 	spec := map[string]interface{}{
 		"to":   map[string]interface{}{"kind": "Service", "name": gw.Name},
 		"port": map[string]interface{}{"targetPort": "grpc"},
-		"tls":  map[string]interface{}{"termination": "passthrough"},
+		"tls":  tlsConfig,
 	}
 	if gw.Spec.Route.Hostname != "" {
 		spec["host"] = gw.Spec.Route.Hostname

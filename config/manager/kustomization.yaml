@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: quay.io/aknochow/ogo
-  newTag: 0.1.0-20260626135416
+  newTag: 0.1.0-20260626145133
