@@ -81,6 +81,7 @@ type OpenShellGatewayReconciler struct {
 // +kubebuilder:rbac:groups=security.openshift.io,resources=securitycontextconstraints,verbs=use
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=oauth.openshift.io,resources=oauthclients,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;grpcroutes,verbs=get;list;watch;create;update;patch;delete
 
 func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -117,10 +118,12 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	isOCP := openshift.IsOpenShift(r.DiscoveryClient)
+	hasGWAPI := openshift.HasGatewayAPI(r.DiscoveryClient)
+	useGWAPI := gatewayAPIEnabled(gw, hasGWAPI)
 	ns := gatewayNamespace(gw)
 	sandboxNS := sandboxNamespace(gw)
 
-	log.Info("Reconciling OpenShellGateway", "namespace", ns, "sandbox_namespace", sandboxNS, "openshift", isOCP)
+	log.Info("Reconciling OpenShellGateway", "namespace", ns, "sandbox_namespace", sandboxNS, "openshift", isOCP, "gatewayAPI", useGWAPI)
 
 	steps := []struct {
 		name string
@@ -148,10 +151,24 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
+	if useGWAPI {
+		if err := r.reconcileGatewayAPI(ctx, gw); err != nil {
+			log.Error(err, "Failed to reconcile Gateway API resources")
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "GatewayAPI", err)
+		}
+	}
+
 	if isOCP {
-		if err := r.reconcileRoute(ctx, gw); err != nil {
-			log.Error(err, "Failed to reconcile Route")
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "Route", err)
+		if useGWAPI {
+			if err := r.reconcileEnvoyRoute(ctx, gw); err != nil {
+				log.Error(err, "Failed to reconcile Envoy Route")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "EnvoyRoute", err)
+			}
+		} else {
+			if err := r.reconcileRoute(ctx, gw); err != nil {
+				log.Error(err, "Failed to reconcile Route")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "Route", err)
+			}
 		}
 		if err := r.reconcileSCCBinding(ctx, gw); err != nil {
 			log.Error(err, "Failed to reconcile SCC binding")
@@ -167,7 +184,7 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	return ctrl.Result{RequeueAfter: requeueInterval}, r.updateStatus(ctx, gw, isOCP)
+	return ctrl.Result{RequeueAfter: requeueInterval}, r.updateStatus(ctx, gw, isOCP, useGWAPI)
 }
 
 // --- Deletion ---
@@ -192,6 +209,34 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 	if openshift.IsOpenShift(r.DiscoveryClient) {
 		clusterResources = append(clusterResources,
 			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox-scc-privileged"}})
+	}
+
+	if openshift.HasGatewayAPI(r.DiscoveryClient) {
+		for _, gvk := range []schema.GroupVersionKind{
+			{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway"},
+			{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GRPCRoute"},
+		} {
+			obj := &unstructured.Unstructured{}
+			obj.SetGroupVersionKind(gvk)
+			obj.SetName(gw.Name)
+			obj.SetNamespace(ns)
+			if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+				log.Error(err, "Failed to delete Gateway API resource", "kind", gvk.Kind)
+			}
+		}
+		svcList := &corev1.ServiceList{}
+		if err := r.List(ctx, svcList, client.MatchingLabels{
+			"gateway.envoyproxy.io/owning-gateway-name":      gw.Name,
+			"gateway.envoyproxy.io/owning-gateway-namespace": ns,
+		}); err == nil && len(svcList.Items) > 0 {
+			envoyRoute := &unstructured.Unstructured{}
+			envoyRoute.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+			envoyRoute.SetName(gw.Name + "-gw")
+			envoyRoute.SetNamespace(svcList.Items[0].Namespace)
+			if err := r.Delete(ctx, envoyRoute); err != nil && !apierrors.IsNotFound(err) {
+				log.Error(err, "Failed to delete Envoy Route")
+			}
+		}
 	}
 
 	for _, obj := range clusterResources {
@@ -762,6 +807,212 @@ func (r *OpenShellGatewayReconciler) reconcileRoute(ctx context.Context, gw *ogo
 	return nil
 }
 
+// --- Gateway API ---
+
+func gatewayAPIEnabled(gw *ogov1alpha1.OpenShellGateway, hasGWAPI bool) bool {
+	if gw.Spec.Route.GatewayAPI.Enabled != nil {
+		return *gw.Spec.Route.GatewayAPI.Enabled
+	}
+	return hasGWAPI
+}
+
+func gatewayClassName(gw *ogov1alpha1.OpenShellGateway) string {
+	if gw.Spec.Route.GatewayAPI.GatewayClassName != "" {
+		return gw.Spec.Route.GatewayAPI.GatewayClassName
+	}
+	return "eg"
+}
+
+func serverTLSSecretName(gw *ogov1alpha1.OpenShellGateway) string {
+	if gw.Spec.TLS.ServerCertSecretName != "" {
+		return gw.Spec.TLS.ServerCertSecretName
+	}
+	return gw.Name + "-server-tls"
+}
+
+func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	ns := gatewayNamespace(gw)
+	hostname := gw.Spec.Route.Hostname
+	if hostname == "" {
+		return fmt.Errorf("route.hostname is required when using Gateway API")
+	}
+
+	tlsSecretName := gw.Name + "-gateway-tls"
+	if err := r.reconcileGatewayTLSCert(ctx, gw, tlsSecretName, hostname); err != nil {
+		return fmt.Errorf("reconciling gateway TLS certificate: %w", err)
+	}
+
+	gwGVK := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway"}
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(gwGVK)
+	err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, existing)
+	if apierrors.IsNotFound(err) {
+		gatewayCR := &unstructured.Unstructured{}
+		gatewayCR.SetGroupVersionKind(gwGVK)
+		gatewayCR.SetName(gw.Name)
+		gatewayCR.SetNamespace(ns)
+		gatewayCR.SetLabels(gatewayLabels(gw))
+		gatewayCR.Object["spec"] = map[string]interface{}{
+			"gatewayClassName": gatewayClassName(gw),
+			"listeners": []interface{}{
+				map[string]interface{}{
+					"name":     "https",
+					"port":     int64(443),
+					"protocol": "HTTPS",
+					"hostname": hostname,
+					"tls": map[string]interface{}{
+						"mode": "Terminate",
+						"certificateRefs": []interface{}{
+							map[string]interface{}{
+								"name": tlsSecretName,
+							},
+						},
+					},
+					"allowedRoutes": map[string]interface{}{
+						"namespaces": map[string]interface{}{
+							"from": "Same",
+						},
+					},
+				},
+			},
+		}
+		if err := r.Create(ctx, gatewayCR); err != nil {
+			return fmt.Errorf("creating Gateway: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("getting Gateway: %w", err)
+	}
+
+	grpcGVK := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GRPCRoute"}
+	existingRoute := &unstructured.Unstructured{}
+	existingRoute.SetGroupVersionKind(grpcGVK)
+	err = r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, existingRoute)
+	if apierrors.IsNotFound(err) {
+		grpcRoute := &unstructured.Unstructured{}
+		grpcRoute.SetGroupVersionKind(grpcGVK)
+		grpcRoute.SetName(gw.Name)
+		grpcRoute.SetNamespace(ns)
+		grpcRoute.SetLabels(gatewayLabels(gw))
+		grpcRoute.Object["spec"] = map[string]interface{}{
+			"parentRefs": []interface{}{
+				map[string]interface{}{
+					"name": gw.Name,
+				},
+			},
+			"hostnames": []interface{}{hostname},
+			"rules": []interface{}{
+				map[string]interface{}{
+					"backendRefs": []interface{}{
+						map[string]interface{}{
+							"name": gw.Name,
+							"port": int64(8080),
+						},
+					},
+				},
+			},
+		}
+		if err := r.Create(ctx, grpcRoute); err != nil {
+			return fmt.Errorf("creating GRPCRoute: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("getting GRPCRoute: %w", err)
+	}
+
+	oldRoute := &unstructured.Unstructured{}
+	oldRoute.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, oldRoute); err == nil {
+		logf.FromContext(ctx).Info("Cleaning up direct Route superseded by Gateway API", "route", gw.Name)
+		_ = r.Delete(ctx, oldRoute)
+	}
+
+	return nil
+}
+
+func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, secretName, hostname string) error {
+	ns := gatewayNamespace(gw)
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		if _, discoveryErr := r.DiscoveryClient.ServerResourcesForGroupVersion("cert-manager.io/v1"); discoveryErr != nil {
+			return fmt.Errorf("cert-manager CRDs not installed — required for Gateway API TLS")
+		}
+		return err
+	}
+
+	issuerName := gw.Spec.TLS.CertManager.IssuerName
+	if issuerName == "" {
+		issuerName = "letsencrypt"
+	}
+	issuerKind := gw.Spec.TLS.CertManager.IssuerKind
+	if issuerKind == "" {
+		issuerKind = "ClusterIssuer"
+	}
+
+	cert := &unstructured.Unstructured{}
+	cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	cert.SetName(secretName)
+	cert.SetNamespace(ns)
+	cert.SetLabels(gatewayLabels(gw))
+	cert.Object["spec"] = map[string]interface{}{
+		"secretName": secretName,
+		"dnsNames":   []interface{}{hostname},
+		"issuerRef": map[string]interface{}{
+			"name": issuerName,
+			"kind": issuerKind,
+		},
+	}
+	return r.Create(ctx, cert)
+}
+
+func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	if gw.Spec.Route.Enabled != nil && !*gw.Spec.Route.Enabled {
+		return nil
+	}
+
+	hostname := gw.Spec.Route.Hostname
+	if hostname == "" {
+		return nil
+	}
+
+	svcList := &corev1.ServiceList{}
+	if err := r.List(ctx, svcList, client.MatchingLabels{
+		"gateway.envoyproxy.io/owning-gateway-name":      gw.Name,
+		"gateway.envoyproxy.io/owning-gateway-namespace": gatewayNamespace(gw),
+	}); err != nil {
+		return fmt.Errorf("listing Envoy proxy services: %w", err)
+	}
+	if len(svcList.Items) == 0 {
+		return nil
+	}
+
+	envoySvc := svcList.Items[0]
+	routeName := gw.Name + "-gw"
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+	err := r.Get(ctx, types.NamespacedName{Name: routeName, Namespace: envoySvc.Namespace}, existing)
+	if apierrors.IsNotFound(err) {
+		route := &unstructured.Unstructured{}
+		route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+		route.SetName(routeName)
+		route.SetNamespace(envoySvc.Namespace)
+		route.SetLabels(gatewayLabels(gw))
+		route.Object["spec"] = map[string]interface{}{
+			"host": hostname,
+			"to":   map[string]interface{}{"kind": "Service", "name": envoySvc.Name},
+			"port": map[string]interface{}{"targetPort": int64(10443)},
+			"tls":  map[string]interface{}{"termination": "passthrough"},
+		}
+		return r.Create(ctx, route)
+	}
+	return err
+}
+
 // --- SCC Binding ---
 
 func (r *OpenShellGatewayReconciler) reconcileSCCBinding(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
@@ -777,7 +1028,7 @@ func (r *OpenShellGatewayReconciler) reconcileSCCBinding(ctx context.Context, gw
 
 // --- Status ---
 
-func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, isOCP bool) error {
+func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, isOCP, useGWAPI bool) error {
 	// Re-fetch to avoid conflicts from earlier mutations
 	latest := &ogov1alpha1.OpenShellGateway{}
 	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name}, latest); err != nil {
@@ -825,11 +1076,27 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 
 	latest.Status.GatewayURL = fmt.Sprintf("https://%s.%s.svc.cluster.local:8080", gw.Name, ns)
 	if isOCP {
-		route := &unstructured.Unstructured{}
-		route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
-		if err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, route); err == nil {
-			if host, ok, _ := unstructured.NestedString(route.Object, "spec", "host"); ok && host != "" {
-				latest.Status.GatewayURL = "https://" + host + ":443"
+		if useGWAPI {
+			svcList := &corev1.ServiceList{}
+			if err := r.List(ctx, svcList, client.MatchingLabels{
+				"gateway.envoyproxy.io/owning-gateway-name":      gw.Name,
+				"gateway.envoyproxy.io/owning-gateway-namespace": ns,
+			}); err == nil && len(svcList.Items) > 0 {
+				route := &unstructured.Unstructured{}
+				route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+				if err := r.Get(ctx, types.NamespacedName{Name: gw.Name + "-gw", Namespace: svcList.Items[0].Namespace}, route); err == nil {
+					if host, ok, _ := unstructured.NestedString(route.Object, "spec", "host"); ok && host != "" {
+						latest.Status.GatewayURL = "https://" + host + ":443"
+					}
+				}
+			}
+		} else {
+			route := &unstructured.Unstructured{}
+			route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+			if err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, route); err == nil {
+				if host, ok, _ := unstructured.NestedString(route.Object, "spec", "host"); ok && host != "" {
+					latest.Status.GatewayURL = "https://" + host + ":443"
+				}
 			}
 		}
 	}

@@ -35,6 +35,8 @@ type OpenShellGatewaySpec struct {
 	Image string `json:"image,omitempty"`
 
 	// ImageTag overrides the default image tag.
+	// TODO: split into separate GatewayImageTag / SupervisorImageTag — shared tag
+	// causes pull failures when overriding only the gateway image for testing.
 	ImageTag string `json:"imageTag,omitempty"`
 
 	// SupervisorImage is the supervisor container image sideloaded into sandbox pods.
@@ -147,6 +149,23 @@ type RouteSpec struct {
 
 	// Hostname is the custom hostname for the Route.
 	Hostname string `json:"hostname,omitempty"`
+
+	// GatewayAPI configures Kubernetes Gateway API ingress (Gateway + GRPCRoute).
+	// When enabled, the operator creates Gateway API resources and routes
+	// through an Envoy Gateway proxy instead of directly via OpenShift Routes.
+	GatewayAPI GatewayAPISpec `json:"gatewayAPI,omitempty"`
+}
+
+// GatewayAPISpec configures Kubernetes Gateway API ingress.
+type GatewayAPISpec struct {
+	// Enabled creates a Gateway and GRPCRoute for ingress.
+	// Auto-detected when nil: enabled if Gateway API CRDs are installed.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// GatewayClassName is the name of the GatewayClass to use.
+	// +kubebuilder:default="eg"
+	GatewayClassName string `json:"gatewayClassName,omitempty"`
 }
 
 // AuthSpec configures gateway authentication.
