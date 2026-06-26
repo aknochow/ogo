@@ -14,19 +14,19 @@ spec:
         OpenShell Gateway instance.
       displayName: Open Shell Gateway
       kind: OpenShellGateway
-      name: openshellgateways.gateway.ogo.io
+      name: openshellgateways.gateway.ogo.aknochow.io
       version: v1alpha1
     - description: OpenShellPolicy defines a sandbox policy template for the OpenShell
         Gateway.
       displayName: Open Shell Policy
       kind: OpenShellPolicy
-      name: openshellpolicies.gateway.ogo.io
+      name: openshellpolicies.gateway.ogo.aknochow.io
       version: v1alpha1
     - description: OpenShellProvider defines a credential bundle for the OpenShell
         Gateway.
       displayName: Open Shell Provider
       kind: OpenShellProvider
-      name: openshellproviders.gateway.ogo.io
+      name: openshellproviders.gateway.ogo.aknochow.io
       version: v1alpha1
   description: Ogo description. TODO.
   displayName: Ogo

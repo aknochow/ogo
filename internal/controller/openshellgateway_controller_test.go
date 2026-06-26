@@ -184,7 +184,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		Expect(*deploy.Spec.Replicas).To(Equal(int32(1)))
 		Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
 		Expect(deploy.Spec.Template.Spec.Containers[0].Name).To(Equal("openshell-gateway"))
-		Expect(deploy.Spec.Template.Annotations).To(HaveKey("ogo.io/config-hash"))
+		Expect(deploy.Spec.Template.Annotations).To(HaveKey("ogo.aknochow.io/config-hash"))
 	})
 
 	It("should create a Service", func() {

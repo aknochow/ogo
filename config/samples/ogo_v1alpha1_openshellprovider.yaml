@@ -1,4 +1,4 @@
-apiVersion: gateway.ogo.io/v1alpha1
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
 kind: OpenShellProvider
 metadata:
   labels:

@@ -79,7 +79,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - gateway.ogo.io
+  - gateway.ogo.aknochow.io
   resources:
   - openshellgateways
   - openshellpolicies
@@ -93,7 +93,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - gateway.ogo.io
+  - gateway.ogo.aknochow.io
   resources:
   - openshellgateways/finalizers
   - openshellpolicies/finalizers
@@ -101,7 +101,7 @@ rules:
   verbs:
   - update
 - apiGroups:
-  - gateway.ogo.io
+  - gateway.ogo.aknochow.io
   resources:
   - openshellgateways/status
   - openshellpolicies/status

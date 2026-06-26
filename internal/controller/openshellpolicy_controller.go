@@ -36,9 +36,9 @@ type OpenShellPolicyReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellpolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellpolicies/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellpolicies/finalizers,verbs=update
+// +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellpolicies/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellpolicies/finalizers,verbs=update
 
 func (r *OpenShellPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)

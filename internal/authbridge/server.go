@@ -13,7 +13,8 @@ import (
 )
 
 type Config struct {
-	Issuer         string
+	Issuer         string // Internal issuer (http://localhost:8085) — used by gateway OIDC discovery
+	ExternalIssuer string // External issuer (https://openshell-auth.apps...) — used in JWTs and CLI redirects
 	Audience       string
 	ListenAddr     string
 	OpenShiftOAuth string
@@ -64,17 +65,26 @@ func (s *Server) Handler() http.Handler {
 	return mux
 }
 
-func (s *Server) handleDiscovery(w http.ResponseWriter, _ *http.Request) {
-	issuer := s.config.Issuer
+func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
+	// Serve different discovery based on caller:
+	// - Gateway (localhost) gets internal URLs → issuer and jwks_uri on localhost
+	// - CLI (external) gets external URLs → all endpoints on external URL
+	base := s.config.ExternalIssuer
+	issuer := s.config.ExternalIssuer
+	host := r.Host
+	if host == "localhost:8085" || host == "127.0.0.1:8085" {
+		base = s.config.Issuer
+		issuer = s.config.Issuer
+	}
 	discovery := map[string]interface{}{
 		"issuer":                                issuer,
-		"authorization_endpoint":                issuer + "/authorize",
-		"token_endpoint":                        issuer + "/token",
-		"jwks_uri":                              issuer + "/jwks",
+		"authorization_endpoint":                s.config.ExternalIssuer + "/authorize",
+		"token_endpoint":                        s.config.ExternalIssuer + "/token",
+		"jwks_uri":                              base + "/jwks",
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code"},
 		"subject_types_supported":               []string{"public"},
-		"id_token_signing_alg_values_supported": []string{"EdDSA"},
+		"id_token_signing_alg_values_supported": []string{"RS256"},
 		"scopes_supported":                      []string{"openid", "profile", "email"},
 		"code_challenge_methods_supported":      []string{"S256", "plain"},
 	}
@@ -100,7 +110,7 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	}
 	s.codesMu.Unlock()
 
-	callbackURL := s.config.Issuer + "/callback"
+	callbackURL := s.config.ExternalIssuer + "/callback"
 
 	params := url.Values{
 		"response_type": {"code"},
@@ -133,7 +143,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	callbackURL := s.config.Issuer + "/callback"
+	callbackURL := s.config.ExternalIssuer + "/callback"
 	tokenResp, err := s.osc.ExchangeCode(code, callbackURL)
 	if err != nil {
 		log.Printf("token exchange failed: %v", err)
@@ -151,7 +161,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	roles := s.mapRoles(userInfo.Groups)
 
 	jwt, err := s.signer.MintToken(
-		s.config.Issuer,
+		s.config.Issuer, // Use internal issuer — matches gateway's OIDC config
 		s.config.Audience,
 		userInfo.UID,
 		userInfo.Name,

@@ -1,30 +1,32 @@
 package authbridge
 
 import (
-	"crypto/ed25519"
+	"crypto"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"time"
 )
 
 type JWTSigner struct {
-	privateKey ed25519.PrivateKey
-	publicKey  ed25519.PublicKey
+	privateKey *rsa.PrivateKey
 	kid        string
 }
 
 func NewJWTSigner() (*JWTSigner, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, fmt.Errorf("generating Ed25519 key: %w", err)
+		return nil, fmt.Errorf("generating RSA key: %w", err)
 	}
-	hash := sha256.Sum256(pub)
+	pubBytes := key.PublicKey.N.Bytes()
+	hash := sha256.Sum256(pubBytes)
 	kid := hex.EncodeToString(hash[:8])
-	return &JWTSigner{privateKey: priv, publicKey: pub, kid: kid}, nil
+	return &JWTSigner{privateKey: key, kid: kid}, nil
 }
 
 type Claims struct {
@@ -55,7 +57,7 @@ func (s *JWTSigner) MintToken(issuer, audience, subject, username, email string,
 		RealmAccess:       RealmAccess{Roles: roles},
 	}
 
-	header := map[string]string{"alg": "EdDSA", "typ": "JWT", "kid": s.kid}
+	header := map[string]string{"alg": "RS256", "typ": "JWT", "kid": s.kid}
 
 	headerJSON, err := json.Marshal(header)
 	if err != nil {
@@ -70,7 +72,11 @@ func (s *JWTSigner) MintToken(issuer, audience, subject, username, email string,
 	claimsB64 := base64.RawURLEncoding.EncodeToString(claimsJSON)
 	signingInput := headerB64 + "." + claimsB64
 
-	signature := ed25519.Sign(s.privateKey, []byte(signingInput))
+	hash := sha256.Sum256([]byte(signingInput))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, s.privateKey, crypto.SHA256, hash[:])
+	if err != nil {
+		return "", fmt.Errorf("signing JWT: %w", err)
+	}
 	sigB64 := base64.RawURLEncoding.EncodeToString(signature)
 
 	return signingInput + "." + sigB64, nil
@@ -82,22 +88,23 @@ type JWKSResponse struct {
 
 type JWK struct {
 	Kty string `json:"kty"`
-	Crv string `json:"crv"`
-	X   string `json:"x"`
+	N   string `json:"n"`
+	E   string `json:"e"`
 	Kid string `json:"kid"`
 	Use string `json:"use"`
 	Alg string `json:"alg"`
 }
 
 func (s *JWTSigner) JWKS() JWKSResponse {
+	pub := &s.privateKey.PublicKey
 	return JWKSResponse{
 		Keys: []JWK{{
-			Kty: "OKP",
-			Crv: "Ed25519",
-			X:   base64.RawURLEncoding.EncodeToString(s.publicKey),
+			Kty: "RSA",
+			N:   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+			E:   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
 			Kid: s.kid,
 			Use: "sig",
-			Alg: "EdDSA",
+			Alg: "RS256",
 		}},
 	}
 }

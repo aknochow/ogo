@@ -50,13 +50,16 @@ func (c *OpenShiftClient) ExchangeCode(code, redirectURI string) (*TokenResponse
 		"grant_type":   {"authorization_code"},
 		"code":         {code},
 		"redirect_uri": {redirectURI},
-		"client_id":    {c.clientID},
-	}
-	if c.clientSecret != "" {
-		data.Set("client_secret", c.clientSecret)
 	}
 
-	resp, err := c.httpClient.PostForm(c.TokenURL(), data)
+	req, err := http.NewRequest("POST", c.TokenURL(), strings.NewReader(data.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("creating token request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.SetBasicAuth(c.clientID, c.clientSecret)
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("token exchange: %w", err)
 	}

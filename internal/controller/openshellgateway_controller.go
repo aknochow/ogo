@@ -49,7 +49,7 @@ import (
 )
 
 const (
-	finalizerName   = "ogo.io/gateway-cleanup"
+	finalizerName   = "ogo.aknochow.io/gateway-cleanup"
 	labelManagedBy  = "app.kubernetes.io/managed-by"
 	labelInstance   = "app.kubernetes.io/instance"
 	labelName       = "app.kubernetes.io/name"
@@ -63,9 +63,9 @@ type OpenShellGatewayReconciler struct {
 	DiscoveryClient discovery.DiscoveryInterface
 }
 
-// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellgateways,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellgateways/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=gateway.ogo.io,resources=openshellgateways/finalizers,verbs=update
+// +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellgateways,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellgateways/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellgateways/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services;serviceaccounts;configmaps;secrets;namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
@@ -386,7 +386,7 @@ func (r *OpenShellGatewayReconciler) reconcileSelfSignedTLS(ctx context.Context,
 	clientErr := r.Get(ctx, types.NamespacedName{Name: clientSecretName, Namespace: ns}, clientSecret)
 
 	if serverErr == nil && clientErr == nil {
-		if serverSecret.Annotations != nil && serverSecret.Annotations["ogo.io/pki-sans-hash"] == sansHash {
+		if serverSecret.Annotations != nil && serverSecret.Annotations["ogo.aknochow.io/pki-sans-hash"] == sansHash {
 			return nil
 		}
 	}
@@ -402,7 +402,7 @@ func (r *OpenShellGatewayReconciler) reconcileSelfSignedTLS(ctx context.Context,
 		if server.Annotations == nil {
 			server.Annotations = map[string]string{}
 		}
-		server.Annotations["ogo.io/pki-sans-hash"] = sansHash
+		server.Annotations["ogo.aknochow.io/pki-sans-hash"] = sansHash
 		server.Type = corev1.SecretTypeTLS
 		server.Data = map[string][]byte{"tls.crt": bundle.ServerCert, "tls.key": bundle.ServerKey, "ca.crt": bundle.CACert}
 		return nil
@@ -583,13 +583,15 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 		containers := []corev1.Container{container}
 
 		if authBridgeEnabled(gw, isOCP) {
-			authBridgeIssuer := authBridgeExternalURL(gw)
+			authBridgeIssuer := authBridgeInternalURL(gw)
+			authBridgeExtIssuer := authBridgeExternalURL(gw)
 			oauthServerURL := "https://oauth-openshift." + clusterDomain(gw)
 			containers = append(containers, corev1.Container{
 				Name:  "auth-bridge",
 				Image: authBridgeImage(gw),
 				Env: []corev1.EnvVar{
 					{Name: "AUTH_BRIDGE_ISSUER", Value: authBridgeIssuer},
+					{Name: "AUTH_BRIDGE_EXTERNAL_ISSUER", Value: authBridgeExtIssuer},
 					{Name: "AUTH_BRIDGE_OPENSHIFT_ISSUER", Value: oauthServerURL},
 					{Name: "AUTH_BRIDGE_CLIENT_ID", Value: "openshell"},
 					{Name: "AUTH_BRIDGE_CLIENT_SECRET", ValueFrom: &corev1.EnvVarSource{
@@ -630,7 +632,7 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 		deploy.Spec.Template = corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{
 				Labels:      labels,
-				Annotations: map[string]string{"ogo.io/config-hash": configHash},
+				Annotations: map[string]string{"ogo.aknochow.io/config-hash": configHash},
 			},
 			Spec: podSpec,
 		}
@@ -923,8 +925,8 @@ func authBridgeExternalURL(gw *ogov1alpha1.OpenShellGateway) string {
 	return "http://openshell-auth." + gatewayNamespace(gw) + ".svc:8085"
 }
 
-func authBridgeInternalURL(gw *ogov1alpha1.OpenShellGateway) string {
-	return authBridgeExternalURL(gw)
+func authBridgeInternalURL(_ *ogov1alpha1.OpenShellGateway) string {
+	return "http://localhost:8085"
 }
 
 func clusterDomain(gw *ogov1alpha1.OpenShellGateway) string {

@@ -11,8 +11,11 @@ import (
 )
 
 func main() {
+	internalIssuer := envOrDefault("AUTH_BRIDGE_ISSUER", "http://localhost:8085")
+	externalIssuer := envOrDefault("AUTH_BRIDGE_EXTERNAL_ISSUER", internalIssuer)
 	config := authbridge.Config{
-		Issuer:         envOrDefault("AUTH_BRIDGE_ISSUER", "http://localhost:8085"),
+		Issuer:         internalIssuer,
+		ExternalIssuer: externalIssuer,
 		Audience:       envOrDefault("AUTH_BRIDGE_AUDIENCE", "openshell-cli"),
 		ListenAddr:     envOrDefault("AUTH_BRIDGE_LISTEN", ":8085"),
 		OpenShiftOAuth: envOrDefault("AUTH_BRIDGE_OPENSHIFT_ISSUER", "https://oauth-openshift.apps.example.com"),
