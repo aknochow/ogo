@@ -215,7 +215,7 @@ spec:
                     description: AppArmorProfile for sandbox pods.
                     type: string
                   defaultImage:
-                    default: quay.io/aap/carbonite:latest
+                    default: quay.io/aap/carbonite:release
                     description: DefaultImage is the default container image for sandbox
                       pods.
                     type: string

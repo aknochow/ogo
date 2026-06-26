@@ -88,7 +88,7 @@ type SandboxSpec struct {
 	Namespace string `json:"namespace,omitempty"`
 
 	// DefaultImage is the default container image for sandbox pods.
-	// +kubebuilder:default="quay.io/aap/carbonite:latest"
+	// +kubebuilder:default="quay.io/aap/carbonite:release"
 	DefaultImage string `json:"defaultImage,omitempty"`
 
 	// ImagePullPolicy for sandbox pod images.
