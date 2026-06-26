@@ -76,6 +76,11 @@ spec:
                           Enabled activates OpenShift OAuth authentication.
                           Auto-detected on OpenShift when nil.
                         type: boolean
+                      tokenTTL:
+                        default: 8h
+                        description: TokenTTL is the duration (e.g. "8h", "24h") that
+                          OIDC tokens are valid.
+                        type: string
                     type: object
                 type: object
               database:

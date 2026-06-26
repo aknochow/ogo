@@ -172,6 +172,10 @@ type OpenShiftAuth struct {
 	// AdminGroup is the OpenShift group that maps to the openshell-admin role.
 	// Users in this group get admin access to the gateway.
 	AdminGroup string `json:"adminGroup,omitempty"`
+
+	// TokenTTL is the duration (e.g. "8h", "24h") that OIDC tokens are valid.
+	// +kubebuilder:default="8h"
+	TokenTTL string `json:"tokenTTL,omitempty"`
 }
 
 // NetworkPolicySpec controls NetworkPolicy creation.

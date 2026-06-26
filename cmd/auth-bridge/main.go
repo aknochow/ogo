@@ -22,7 +22,7 @@ func main() {
 		ClientID:       envOrDefault("AUTH_BRIDGE_CLIENT_ID", "openshell"),
 		ClientSecret:   os.Getenv("AUTH_BRIDGE_CLIENT_SECRET"),
 		AdminGroup:     os.Getenv("AUTH_BRIDGE_ADMIN_GROUP"),
-		TokenTTL:       1 * time.Hour,
+		TokenTTL:       parseDuration(os.Getenv("AUTH_BRIDGE_TOKEN_TTL"), 8*time.Hour),
 	}
 
 	server, err := authbridge.NewServer(config)
@@ -43,4 +43,15 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func parseDuration(s string, fallback time.Duration) time.Duration {
+	if s == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return fallback
+	}
+	return d
 }

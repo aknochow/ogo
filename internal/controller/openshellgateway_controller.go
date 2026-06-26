@@ -601,6 +601,7 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 						},
 					}},
 					{Name: "AUTH_BRIDGE_ADMIN_GROUP", Value: gw.Spec.Auth.OpenShift.AdminGroup},
+					{Name: "AUTH_BRIDGE_TOKEN_TTL", Value: tokenTTL(gw)},
 				},
 				Ports: []corev1.ContainerPort{
 					{Name: "auth", ContainerPort: 8085, Protocol: corev1.ProtocolTCP},
@@ -927,6 +928,13 @@ func authBridgeExternalURL(gw *ogov1alpha1.OpenShellGateway) string {
 
 func authBridgeInternalURL(_ *ogov1alpha1.OpenShellGateway) string {
 	return "http://localhost:8085"
+}
+
+func tokenTTL(gw *ogov1alpha1.OpenShellGateway) string {
+	if gw.Spec.Auth.OpenShift.TokenTTL != "" {
+		return gw.Spec.Auth.OpenShift.TokenTTL
+	}
+	return "8h"
 }
 
 func clusterDomain(gw *ogov1alpha1.OpenShellGateway) string {
