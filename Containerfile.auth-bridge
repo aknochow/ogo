@@ -1,0 +1,22 @@
+# Build the auth-bridge binary
+FROM registry.access.redhat.com/hi/go:latest-builder AS builder
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /workspace
+COPY go.mod go.mod
+COPY go.sum go.sum
+RUN go mod download
+
+COPY cmd/auth-bridge/ cmd/auth-bridge/
+COPY internal/authbridge/ internal/authbridge/
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o auth-bridge cmd/auth-bridge/main.go
+
+# Hummingbird distroless runtime
+FROM registry.access.redhat.com/hi/core-runtime:latest
+WORKDIR /
+COPY --from=builder /workspace/auth-bridge .
+USER 65532:65532
+
+ENTRYPOINT ["/auth-bridge"]

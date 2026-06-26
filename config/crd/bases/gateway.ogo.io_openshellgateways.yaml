@@ -57,8 +57,26 @@ spec:
                   allowUnauthenticated:
                     default: false
                     description: AllowUnauthenticated enables unauthenticated access
-                      (dev mode only).
+                      (dev mode only, not recommended).
                     type: boolean
+                  openshift:
+                    description: |-
+                      OpenShift configures authentication via OpenShift's built-in OAuth server.
+                      This is the default and recommended auth method on OpenShift.
+                      The operator deploys an auth-bridge sidecar that translates OpenShift
+                      OAuth tokens to standard OIDC JWTs for the gateway.
+                    properties:
+                      adminGroup:
+                        description: |-
+                          AdminGroup is the OpenShift group that maps to the openshell-admin role.
+                          Users in this group get admin access to the gateway.
+                        type: string
+                      enabled:
+                        description: |-
+                          Enabled activates OpenShift OAuth authentication.
+                          Auto-detected on OpenShift when nil.
+                        type: boolean
+                    type: object
                 type: object
               database:
                 description: Database configures the PostgreSQL connection.

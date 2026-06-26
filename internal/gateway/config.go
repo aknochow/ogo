@@ -8,7 +8,8 @@ import (
 )
 
 // RenderGatewayTOML generates the gateway.toml configuration from the CR spec.
-func RenderGatewayTOML(gw *ogov1alpha1.OpenShellGateway, sandboxNS string) string {
+// RenderGatewayTOML generates gateway.toml. oidcIssuer is the auth-bridge URL (empty to skip OIDC).
+func RenderGatewayTOML(gw *ogov1alpha1.OpenShellGateway, sandboxNS string, oidcIssuer ...string) string {
 	var b strings.Builder
 
 	tlsEnabled := gw.Spec.TLS.Enabled == nil || *gw.Spec.TLS.Enabled
@@ -41,6 +42,16 @@ func RenderGatewayTOML(gw *ogov1alpha1.OpenShellGateway, sandboxNS string) strin
 	if gw.Spec.Auth.AllowUnauthenticated {
 		b.WriteString("\n[openshell.gateway.auth]\n")
 		b.WriteString("allow_unauthenticated_users = true\n")
+	}
+
+	if len(oidcIssuer) > 0 && oidcIssuer[0] != "" {
+		b.WriteString("\n[openshell.gateway.oidc]\n")
+		fmt.Fprintf(&b, "issuer        = %q\n", oidcIssuer[0])
+		b.WriteString("audience      = \"openshell-cli\"\n")
+		b.WriteString("jwks_ttl_secs = 300\n")
+		b.WriteString("roles_claim   = \"realm_access.roles\"\n")
+		b.WriteString("admin_role    = \"openshell-admin\"\n")
+		b.WriteString("user_role     = \"openshell-user\"\n")
 	}
 
 	b.WriteString("\n[openshell.gateway.gateway_jwt]\n")

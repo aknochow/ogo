@@ -341,7 +341,7 @@ spec:
                 - --health-probe-bind-address=:8081
                 command:
                 - /manager
-                image: quay.io/aknochow/ogo:0.1.0-20260625141551
+                image: quay.io/aknochow/ogo:0.1.0-20260626112750
                 livenessProbe:
                   httpGet:
                     path: /healthz

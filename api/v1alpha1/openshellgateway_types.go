@@ -151,9 +151,27 @@ type RouteSpec struct {
 
 // AuthSpec configures gateway authentication.
 type AuthSpec struct {
-	// AllowUnauthenticated enables unauthenticated access (dev mode only).
+	// AllowUnauthenticated enables unauthenticated access (dev mode only, not recommended).
 	// +kubebuilder:default=false
 	AllowUnauthenticated bool `json:"allowUnauthenticated,omitempty"`
+
+	// OpenShift configures authentication via OpenShift's built-in OAuth server.
+	// This is the default and recommended auth method on OpenShift.
+	// The operator deploys an auth-bridge sidecar that translates OpenShift
+	// OAuth tokens to standard OIDC JWTs for the gateway.
+	OpenShift OpenShiftAuth `json:"openshift,omitempty"`
+}
+
+// OpenShiftAuth configures the auth-bridge for OpenShift OAuth integration.
+type OpenShiftAuth struct {
+	// Enabled activates OpenShift OAuth authentication.
+	// Auto-detected on OpenShift when nil.
+	// +optional
+	Enabled *bool `json:"enabled,omitempty"`
+
+	// AdminGroup is the OpenShift group that maps to the openshell-admin role.
+	// Users in this group get admin access to the gateway.
+	AdminGroup string `json:"adminGroup,omitempty"`
 }
 
 // NetworkPolicySpec controls NetworkPolicy creation.
