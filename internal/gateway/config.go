@@ -100,7 +100,7 @@ func defaultImage(gw *ogov1alpha1.OpenShellGateway) string {
 	if gw.Spec.Sandbox.DefaultImage != "" {
 		return gw.Spec.Sandbox.DefaultImage
 	}
-	return "quay.io/aap/carbonite:latest"
+	return "ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
 }
 
 func supervisorImage(gw *ogov1alpha1.OpenShellGateway) string {

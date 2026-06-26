@@ -215,7 +215,7 @@ spec:
                     description: AppArmorProfile for sandbox pods.
                     type: string
                   defaultImage:
-                    default: quay.io/aap/carbonite:release
+                    default: ghcr.io/nvidia/openshell-community/sandboxes/base:latest
                     description: DefaultImage is the default container image for sandbox
                       pods.
                     type: string

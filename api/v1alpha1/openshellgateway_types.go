@@ -88,7 +88,7 @@ type SandboxSpec struct {
 	Namespace string `json:"namespace,omitempty"`
 
 	// DefaultImage is the default container image for sandbox pods.
-	// +kubebuilder:default="quay.io/aap/carbonite:release"
+	// +kubebuilder:default="ghcr.io/nvidia/openshell-community/sandboxes/base:latest"
 	DefaultImage string `json:"defaultImage,omitempty"`
 
 	// ImagePullPolicy for sandbox pod images.

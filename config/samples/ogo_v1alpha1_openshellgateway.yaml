@@ -12,7 +12,7 @@ spec:
   database:
     secretName: openshell-pg-uri
   sandbox:
-    defaultImage: quay.io/aap/carbonite:latest
+    defaultImage: ghcr.io/nvidia/openshell-community/sandboxes/base:latest
     workspaceStorageSize: "2Gi"
     appArmorProfile: "Unconfined"
   tls:

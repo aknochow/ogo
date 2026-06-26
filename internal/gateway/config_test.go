@@ -28,7 +28,7 @@ func TestRenderGatewayTOML_Defaults(t *testing.T) {
 		`metrics_bind_address  = "0.0.0.0:9090"`,
 		`log_level             = "info"`,
 		`sandbox_namespace     = "openshell"`,
-		`default_image         = "quay.io/aap/carbonite:latest"`,
+		`default_image         = "ghcr.io/nvidia/openshell-community/sandboxes/base:latest"`,
 		`supervisor_image      = "ghcr.io/nvidia/openshell/supervisor"`,
 		`[openshell.gateway.tls]`,
 		`cert_path             = "/etc/openshell-tls/server/tls.crt"`,

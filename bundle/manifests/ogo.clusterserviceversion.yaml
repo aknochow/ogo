@@ -27,7 +27,7 @@ metadata:
             "replicas": 1,
             "sandbox": {
               "appArmorProfile": "Unconfined",
-              "defaultImage": "quay.io/aap/carbonite:latest",
+              "defaultImage": "ghcr.io/nvidia/openshell-community/sandboxes/base:latest",
               "workspaceStorageSize": "2Gi"
             },
             "tls": {
