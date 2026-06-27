@@ -100,9 +100,8 @@ spec:
                 description: Image is the gateway container image.
                 type: string
               imageTag:
-                description: |-
-                  ImageTag overrides the default image tag.
-                  causes pull failures when overriding only the gateway image for testing.
+                description: ImageTag overrides the default image tag for gateway
+                  and supervisor containers.
                 type: string
               logLevel:
                 default: info
@@ -220,10 +219,14 @@ spec:
                         default: eg
                         description: GatewayClassName is the name of the GatewayClass
                           to use.
+                        maxLength: 253
                         type: string
                     type: object
                   hostname:
-                    description: Hostname is the custom hostname for the Route.
+                    description: Hostname is the custom hostname for the Route (e.g.
+                      openshell.apps.example.com).
+                    maxLength: 253
+                    pattern: ^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$
                     type: string
                 type: object
               sandbox:

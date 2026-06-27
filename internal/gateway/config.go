@@ -7,8 +7,8 @@ import (
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
 )
 
-// RenderGatewayTOML generates the gateway.toml configuration from the CR spec.
-// RenderGatewayTOML generates gateway.toml. oidcIssuer is the auth-bridge URL (empty to skip OIDC).
+// RenderGatewayTOML generates gateway.toml from the CR spec.
+// oidcIssuer is the auth-bridge URL; pass empty to skip the OIDC section.
 func RenderGatewayTOML(gw *ogov1alpha1.OpenShellGateway, sandboxNS string, oidcIssuer ...string) string {
 	var b strings.Builder
 

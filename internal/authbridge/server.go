@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"time"
 )
@@ -84,9 +85,8 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code"},
 		"subject_types_supported":               []string{"public"},
-		"id_token_signing_alg_values_supported": []string{"RS256"},
+		"id_token_signing_alg_values_supported": []string{"EdDSA"},
 		"scopes_supported":                      []string{"openid", "profile", "email"},
-		"code_challenge_methods_supported":      []string{"S256", "plain"},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(discovery)
@@ -97,13 +97,48 @@ func (s *Server) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 	json.NewEncoder(w).Encode(s.signer.JWKS())
 }
 
+func (s *Server) isAllowedRedirectURI(uri string) bool {
+	if uri == "" {
+		return true
+	}
+	u, err := url.Parse(uri)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return false
+	}
+	if u.Host == "localhost" || u.Host == "127.0.0.1" || strings.HasPrefix(u.Host, "localhost:") || strings.HasPrefix(u.Host, "127.0.0.1:") {
+		return true
+	}
+	if s.config.ExternalIssuer != "" {
+		allowed, err := url.Parse(s.config.ExternalIssuer)
+		if err == nil && u.Host == allowed.Host {
+			return true
+		}
+	}
+	return false
+}
+
+const maxPendingCodes = 10000
+
 func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	clientRedirectURI := r.URL.Query().Get("redirect_uri")
 	state := r.URL.Query().Get("state")
 
+	if !s.isAllowedRedirectURI(clientRedirectURI) {
+		http.Error(w, "invalid redirect_uri", http.StatusBadRequest)
+		return
+	}
+
 	bridgeState := generateCode()
 
 	s.codesMu.Lock()
+	if len(s.codes) >= maxPendingCodes {
+		s.codesMu.Unlock()
+		http.Error(w, "too many pending requests", http.StatusServiceUnavailable)
+		return
+	}
 	s.codes[bridgeState] = &pendingCode{
 		redirectURI: clientRedirectURI,
 		expiresAt:   time.Now().Add(5 * time.Minute),
@@ -185,12 +220,15 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	redirectURL := pending.redirectURI
 	if redirectURL == "" {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"access_token": jwt, "token_type": "Bearer"})
+		http.Error(w, "missing redirect_uri", http.StatusBadRequest)
 		return
 	}
 
-	u, _ := url.Parse(redirectURL)
+	u, err := url.Parse(redirectURL)
+	if err != nil {
+		http.Error(w, "invalid redirect URI", http.StatusBadRequest)
+		return
+	}
 	q := u.Query()
 	q.Set("code", bridgeCode)
 	q.Set("state", clientState)
@@ -246,7 +284,9 @@ func (s *Server) mapRoles(groups []string) []string {
 
 func generateCode() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
 	return hex.EncodeToString(b)
 }
 

@@ -22,10 +22,13 @@ spec:
     defaultImage: ghcr.io/nvidia/openshell-community/sandboxes/base:latest
     workspaceStorageSize: "2Gi"
     appArmorProfile: "Unconfined"
+  # tls.enabled controls TLS on the gateway pod itself.
+  # Set to false when using Envoy Gateway (Envoy terminates TLS instead).
+  # The Gateway API reconciler creates its own cert-manager Certificate
+  # for the Envoy listener regardless of this setting.
   tls:
     enabled: false
     certManager:
-      enabled: true
       issuerName: letsencrypt
       issuerKind: ClusterIssuer
   route:

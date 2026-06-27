@@ -34,10 +34,10 @@ type OpenShellGatewaySpec struct {
 	// +kubebuilder:default="ghcr.io/nvidia/openshell/gateway"
 	Image string `json:"image,omitempty"`
 
-	// ImageTag overrides the default image tag.
-	// TODO: split into separate GatewayImageTag / SupervisorImageTag — shared tag
-	// causes pull failures when overriding only the gateway image for testing.
+	// ImageTag overrides the default image tag for gateway and supervisor containers.
 	ImageTag string `json:"imageTag,omitempty"`
+	// TODO(aknochow): split into separate GatewayImageTag / SupervisorImageTag —
+	// shared tag causes pull failures when overriding only the gateway image.
 
 	// SupervisorImage is the supervisor container image sideloaded into sandbox pods.
 	// +kubebuilder:default="ghcr.io/nvidia/openshell/supervisor"
@@ -147,7 +147,9 @@ type RouteSpec struct {
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
 
-	// Hostname is the custom hostname for the Route.
+	// Hostname is the custom hostname for the Route (e.g. openshell.apps.example.com).
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$`
 	Hostname string `json:"hostname,omitempty"`
 
 	// GatewayAPI configures Kubernetes Gateway API ingress (Gateway + GRPCRoute).
@@ -165,6 +167,7 @@ type GatewayAPISpec struct {
 
 	// GatewayClassName is the name of the GatewayClass to use.
 	// +kubebuilder:default="eg"
+	// +kubebuilder:validation:MaxLength=253
 	GatewayClassName string `json:"gatewayClassName,omitempty"`
 }
 

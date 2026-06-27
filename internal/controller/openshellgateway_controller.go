@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -177,9 +178,11 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if authBridgeEnabled(gw, isOCP) {
 			if err := r.reconcileAuthBridgeRoute(ctx, gw); err != nil {
 				log.Error(err, "Failed to reconcile auth-bridge Route")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "AuthBridgeRoute", err)
 			}
 			if err := r.reconcileOAuthClient(ctx, gw); err != nil {
 				log.Error(err, "Failed to reconcile OAuthClient")
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "OAuthClient", err)
 			}
 		}
 	}
@@ -211,7 +214,7 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox-scc-privileged"}})
 	}
 
-	if openshift.HasGatewayAPI(r.DiscoveryClient) {
+	{ // Gateway API cleanup — attempt unconditionally; NotFound is expected if CRDs absent
 		for _, gvk := range []schema.GroupVersionKind{
 			{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway"},
 			{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GRPCRoute"},
@@ -823,13 +826,6 @@ func gatewayClassName(gw *ogov1alpha1.OpenShellGateway) string {
 	return "eg"
 }
 
-func serverTLSSecretName(gw *ogov1alpha1.OpenShellGateway) string {
-	if gw.Spec.TLS.ServerCertSecretName != "" {
-		return gw.Spec.TLS.ServerCertSecretName
-	}
-	return gw.Name + "-server-tls"
-}
-
 func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
 	ns := gatewayNamespace(gw)
 	hostname := gw.Spec.Route.Hostname
@@ -922,7 +918,9 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw
 	oldRoute.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
 	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, oldRoute); err == nil {
 		logf.FromContext(ctx).Info("Cleaning up direct Route superseded by Gateway API", "route", gw.Name)
-		_ = r.Delete(ctx, oldRoute)
+		if err := r.Delete(ctx, oldRoute); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("cleaning up superseded Route: %w", err)
+		}
 	}
 
 	return nil
@@ -1047,7 +1045,11 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		return r.Status().Update(ctx, latest)
 	}
 
-	if deploy.Status.ReadyReplicas > 0 && deploy.Status.ReadyReplicas == *deploy.Spec.Replicas {
+	desiredReplicas := int32(1)
+	if deploy.Spec.Replicas != nil {
+		desiredReplicas = *deploy.Spec.Replicas
+	}
+	if deploy.Status.ReadyReplicas > 0 && deploy.Status.ReadyReplicas == desiredReplicas {
 		latest.Status.Phase = ogov1alpha1.PhaseRunning
 		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
 			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionTrue,
@@ -1205,10 +1207,16 @@ func authBridgeImage(gw *ogov1alpha1.OpenShellGateway) string {
 	return "quay.io/aknochow/ogo-auth-bridge:" + tag
 }
 
+func domainSuffix(hostname string) string {
+	if _, after, ok := strings.Cut(hostname, "."); ok {
+		return after
+	}
+	return hostname
+}
+
 func authBridgeExternalURL(gw *ogov1alpha1.OpenShellGateway) string {
 	if gw.Spec.Route.Hostname != "" {
-		domain := gw.Spec.Route.Hostname
-		return "https://openshell-auth." + domain[len("openshell."):]
+		return "https://openshell-auth." + domainSuffix(gw.Spec.Route.Hostname)
 	}
 	return "http://openshell-auth." + gatewayNamespace(gw) + ".svc:8085"
 }
@@ -1226,11 +1234,7 @@ func tokenTTL(gw *ogov1alpha1.OpenShellGateway) string {
 
 func clusterDomain(gw *ogov1alpha1.OpenShellGateway) string {
 	if gw.Spec.Route.Hostname != "" {
-		host := gw.Spec.Route.Hostname
-		idx := len("openshell.")
-		if idx < len(host) {
-			return host[idx:]
-		}
+		return domainSuffix(gw.Spec.Route.Hostname)
 	}
 	return "apps.example.com"
 }
@@ -1245,7 +1249,7 @@ func (r *OpenShellGatewayReconciler) reconcileAuthBridgeRoute(ctx context.Contex
 	if apierrors.IsNotFound(err) {
 		hostname := ""
 		if gw.Spec.Route.Hostname != "" {
-			hostname = "openshell-auth." + gw.Spec.Route.Hostname[len("openshell."):]
+			hostname = "openshell-auth." + domainSuffix(gw.Spec.Route.Hostname)
 		}
 
 		route := &unstructured.Unstructured{}

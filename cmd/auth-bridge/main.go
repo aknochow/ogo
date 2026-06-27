@@ -25,6 +25,10 @@ func main() {
 		TokenTTL:       parseDuration(os.Getenv("AUTH_BRIDGE_TOKEN_TTL"), 8*time.Hour),
 	}
 
+	if config.ClientSecret == "" {
+		log.Fatal("AUTH_BRIDGE_CLIENT_SECRET is required")
+	}
+
 	server, err := authbridge.NewServer(config)
 	if err != nil {
 		log.Fatalf("Failed to create auth-bridge server: %v", err)
@@ -33,7 +37,14 @@ func main() {
 	fmt.Printf("auth-bridge starting\n  issuer: %s\n  openshift: %s\n  listen: %s\n",
 		config.Issuer, config.OpenShiftOAuth, config.ListenAddr)
 
-	if err := http.ListenAndServe(config.ListenAddr, server.Handler()); err != nil {
+	srv := &http.Server{
+		Addr:         config.ListenAddr,
+		Handler:      server.Handler(),
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		log.Fatalf("Server failed: %v", err)
 	}
 }

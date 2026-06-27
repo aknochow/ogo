@@ -23,6 +23,7 @@ import (
 // OpenShellPolicySpec defines a sandbox policy template for the OpenShell Gateway.
 type OpenShellPolicySpec struct {
 	// PolicyName is the name of the policy in the gateway.
+	// +kubebuilder:validation:MinLength=1
 	PolicyName string `json:"policyName"`
 
 	// Filesystem defines filesystem access policies.

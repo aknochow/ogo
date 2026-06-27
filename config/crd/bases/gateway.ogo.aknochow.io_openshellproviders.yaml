@@ -78,6 +78,7 @@ spec:
               providerType:
                 description: ProviderType is the canonical provider profile slug (e.g.
                   "claude-code", "github", "nvidia").
+                minLength: 1
                 type: string
             required:
             - providerType

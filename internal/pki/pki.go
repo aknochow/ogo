@@ -184,6 +184,9 @@ func pemEncodeCert(der []byte) []byte {
 }
 
 func newSerial() *big.Int {
-	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
 	return serial
 }

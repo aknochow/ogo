@@ -144,6 +144,7 @@ spec:
                 type: object
               policyName:
                 description: PolicyName is the name of the policy in the gateway.
+                minLength: 1
                 type: string
               process:
                 description: Process defines process execution policies.

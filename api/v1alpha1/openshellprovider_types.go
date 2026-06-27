@@ -23,6 +23,7 @@ import (
 // OpenShellProviderSpec defines credential bundles for the OpenShell Gateway.
 type OpenShellProviderSpec struct {
 	// ProviderType is the canonical provider profile slug (e.g. "claude-code", "github", "nvidia").
+	// +kubebuilder:validation:MinLength=1
 	ProviderType string `json:"providerType"`
 
 	// Credentials maps environment variable names to Secret key references.

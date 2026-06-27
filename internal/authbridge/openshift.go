@@ -2,11 +2,13 @@ package authbridge
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 )
 
@@ -18,15 +20,19 @@ type OpenShiftClient struct {
 }
 
 func NewOpenShiftClient(oauthServerURL, clientID, clientSecret string) *OpenShiftClient {
+	transport := &http.Transport{}
+	caCert, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+	if err == nil {
+		pool := x509.NewCertPool()
+		pool.AppendCertsFromPEM(caCert)
+		transport.TLSClientConfig = &tls.Config{RootCAs: pool}
+	}
+
 	return &OpenShiftClient{
 		oauthServerURL: strings.TrimRight(oauthServerURL, "/"),
 		clientID:       clientID,
 		clientSecret:   clientSecret,
-		httpClient: &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // internal cluster communication
-			},
-		},
+		httpClient:     &http.Client{Transport: transport},
 	}
 }
 
@@ -84,15 +90,11 @@ type UserInfo struct {
 }
 
 func (c *OpenShiftClient) GetUserInfo(accessToken string) (*UserInfo, error) {
-	apiURL := strings.Replace(c.oauthServerURL, "oauth-openshift", "api", 1)
-	apiURL = strings.Replace(apiURL, ":443", ":6443", 1)
-	if !strings.Contains(apiURL, ":6443") {
-		u, err := url.Parse(apiURL)
-		if err == nil {
-			u.Host = u.Hostname() + ":6443"
-			apiURL = u.String()
-		}
+	apiURL := os.Getenv("KUBERNETES_API_URL")
+	if apiURL == "" {
+		apiURL = "https://kubernetes.default.svc:443"
 	}
+	apiURL = strings.TrimRight(apiURL, "/")
 
 	req, err := http.NewRequest("GET", apiURL+"/apis/user.openshift.io/v1/users/~", nil)
 	if err != nil {
