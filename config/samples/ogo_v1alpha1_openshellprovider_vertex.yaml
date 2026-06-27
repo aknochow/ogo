@@ -1,0 +1,26 @@
+# OpenShellProvider — Google Vertex AI
+#
+# Provides Google Cloud credentials for Vertex AI inference
+# (Claude on Vertex, Gemini, third-party models).
+#
+# Uses a GCP service account key for token refresh. The gateway
+# exchanges the key for short-lived access tokens and injects them
+# into sandbox pods automatically.
+#
+# Create the secret from a GCP service account JSON key:
+#   oc create secret generic vertex-sa-key -n ogo \
+#     --from-file=key.json=path/to/service-account.json
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellProvider
+metadata:
+  name: vertex-ai
+  namespace: ogo
+spec:
+  providerType: google-vertex-ai
+  credentials:
+    GOOGLE_SERVICE_ACCOUNT_KEY:
+      name: vertex-sa-key
+      key: key.json
+  config:
+    project: my-gcp-project
+    region: us-central1

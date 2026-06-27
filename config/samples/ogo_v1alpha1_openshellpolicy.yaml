@@ -1,31 +1,52 @@
+# OpenShellPolicy — Claude Code with Anthropic API
+#
+# Allows sandbox pods to reach the Anthropic API, Statsig (telemetry),
+# and Sentry (error reporting) — the endpoints Claude Code needs.
+#
+# Filesystem: workdir read-write, system paths read-only.
+# Network: Anthropic endpoints only, restricted to the claude binary.
 apiVersion: gateway.ogo.aknochow.io/v1alpha1
 kind: OpenShellPolicy
 metadata:
-  labels:
-    app.kubernetes.io/name: ogo
-    app.kubernetes.io/managed-by: kustomize
-  name: default-policy
+  name: claude-code
   namespace: ogo
 spec:
-  policyName: default
+  policyName: claude-code
   filesystem:
     includeWorkdir: true
     readOnly:
       - /usr
+      - /lib
       - /etc
+      - /app
+      - /proc/self
+      - /dev/urandom
     readWrite:
       - /sandbox
       - /tmp
+      - /dev/null
   network:
-    anthropic-api:
-      name: anthropic
+    anthropic:
+      name: Anthropic API
       endpoints:
         - host: api.anthropic.com
           port: 443
           protocol: rest
           access: read-write
+          enforcement: enforce
+        - host: statsig.anthropic.com
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
+        - host: sentry.io
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
       binaries:
-        - path: /usr/bin/curl
+        - path: /usr/bin/claude
+        - path: /usr/local/bin/claude
   process:
     runAsUser: sandbox
     runAsGroup: sandbox

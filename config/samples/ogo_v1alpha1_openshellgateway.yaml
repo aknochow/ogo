@@ -1,22 +1,39 @@
+# OpenShellGateway — production config with OpenShift SSO auth and Envoy Gateway
+#
+# Prerequisites:
+#   - cert-manager with a ClusterIssuer named "letsencrypt"
+#   - PostgreSQL Secret with key "uri" (e.g. postgresql://user:pass@host:5432/db)
+#   - Envoy Gateway installed (GatewayClass "eg")
+#   - DNS wildcard *.apps.<cluster> pointing to the cluster
+#
+# The operator auto-detects OpenShift and Gateway API availability.
+# On OpenShift: deploys auth-bridge sidecar for SSO login.
+# With Gateway API: creates Gateway + GRPCRoute + Let's Encrypt cert.
 apiVersion: gateway.ogo.aknochow.io/v1alpha1
 kind: OpenShellGateway
 metadata:
-  labels:
-    app.kubernetes.io/name: ogo
-    app.kubernetes.io/managed-by: kustomize
   name: openshell
 spec:
   namespace: ogo
-  image: ghcr.io/nvidia/openshell/gateway
   replicas: 1
   database:
-    secretName: openshell-pg-uri
+    secretName: ogo-pg
   sandbox:
     defaultImage: ghcr.io/nvidia/openshell-community/sandboxes/base:latest
     workspaceStorageSize: "2Gi"
     appArmorProfile: "Unconfined"
   tls:
-    enabled: true
+    enabled: false
+    certManager:
+      enabled: true
+      issuerName: letsencrypt
+      issuerKind: ClusterIssuer
+  route:
+    hostname: openshell.apps.example.com
+  auth:
+    openshift:
+      adminGroup: openshell-admins
+      tokenTTL: "8h"
   logLevel: info
   networkPolicy:
     enabled: true

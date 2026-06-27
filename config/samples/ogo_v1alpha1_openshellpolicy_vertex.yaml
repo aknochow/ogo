@@ -1,0 +1,69 @@
+# OpenShellPolicy — Claude Code with Vertex AI
+#
+# Allows sandbox pods to reach Google Vertex AI endpoints for inference
+# (Claude on Vertex, Gemini, etc.) plus the Anthropic telemetry endpoints
+# that Claude Code uses.
+#
+# The Vertex AI endpoints use a wildcard for regional API hosts.
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellPolicy
+metadata:
+  name: claude-code-vertex
+  namespace: ogo
+spec:
+  policyName: claude-code-vertex
+  filesystem:
+    includeWorkdir: true
+    readOnly:
+      - /usr
+      - /lib
+      - /etc
+      - /app
+      - /proc/self
+      - /dev/urandom
+    readWrite:
+      - /sandbox
+      - /tmp
+      - /dev/null
+  network:
+    vertex-ai:
+      name: Google Vertex AI
+      endpoints:
+        - host: "*.aiplatform.googleapis.com"
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
+        - host: aiplatform.googleapis.com
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
+        - host: oauth2.googleapis.com
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
+      binaries:
+        - path: /usr/bin/claude
+        - path: /usr/local/bin/claude
+        - path: /usr/bin/curl
+    anthropic-telemetry:
+      name: Anthropic Telemetry
+      endpoints:
+        - host: statsig.anthropic.com
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
+        - host: sentry.io
+          port: 443
+          protocol: rest
+          access: read-write
+          enforcement: enforce
+      binaries:
+        - path: /usr/bin/claude
+        - path: /usr/local/bin/claude
+  process:
+    runAsUser: sandbox
+    runAsGroup: sandbox

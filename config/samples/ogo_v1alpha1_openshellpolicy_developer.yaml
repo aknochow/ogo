@@ -1,0 +1,81 @@
+# OpenShellPolicy — Developer (GitHub + package registries)
+#
+# A general-purpose developer policy that allows:
+# - GitHub API and git operations (read-only by default)
+# - PyPI and npm package installation
+# - Standard developer tools
+#
+# Combine with a provider-specific policy (claude-code, vertex)
+# for the inference endpoint access.
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellPolicy
+metadata:
+  name: developer
+  namespace: ogo
+spec:
+  policyName: developer
+  filesystem:
+    includeWorkdir: true
+    readOnly:
+      - /usr
+      - /lib
+      - /etc
+      - /app
+      - /proc/self
+      - /dev/urandom
+      - /var/log
+    readWrite:
+      - /sandbox
+      - /tmp
+      - /dev/null
+  network:
+    github:
+      name: GitHub
+      endpoints:
+        - host: api.github.com
+          port: 443
+          protocol: rest
+          access: read-only
+          enforcement: enforce
+        - host: api.github.com
+          port: 443
+          protocol: graphql
+          access: read-only
+          enforcement: enforce
+        - host: github.com
+          port: 443
+          protocol: rest
+          access: read-only
+          enforcement: enforce
+      binaries:
+        - path: /usr/bin/gh
+        - path: /usr/local/bin/gh
+        - path: /usr/bin/git
+        - path: /usr/local/bin/git
+    pypi:
+      name: PyPI
+      endpoints:
+        - host: pypi.org
+          port: 443
+          enforcement: enforce
+        - host: files.pythonhosted.org
+          port: 443
+          enforcement: enforce
+      binaries:
+        - path: /usr/bin/python3
+        - path: /usr/bin/pip
+        - path: /usr/local/bin/pip
+    npm:
+      name: npm Registry
+      endpoints:
+        - host: registry.npmjs.org
+          port: 443
+          enforcement: enforce
+      binaries:
+        - path: /usr/bin/npm
+        - path: /usr/local/bin/npm
+        - path: /usr/bin/node
+        - path: /usr/local/bin/node
+  process:
+    runAsUser: sandbox
+    runAsGroup: sandbox

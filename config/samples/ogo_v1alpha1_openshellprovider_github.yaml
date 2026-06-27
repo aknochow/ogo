@@ -1,0 +1,18 @@
+# OpenShellProvider — GitHub
+#
+# Injects GITHUB_TOKEN into sandbox pods for git clone, gh CLI,
+# and GitHub API access.
+#
+# Create the secret first:
+#   oc create secret generic github-token -n ogo --from-literal=token=ghp_...
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellProvider
+metadata:
+  name: github
+  namespace: ogo
+spec:
+  providerType: github
+  credentials:
+    GITHUB_TOKEN:
+      name: github-token
+      key: token

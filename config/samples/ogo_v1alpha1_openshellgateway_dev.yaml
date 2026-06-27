@@ -1,0 +1,31 @@
+# OpenShellGateway — dev/local config with self-signed TLS (no auth-bridge)
+#
+# For local testing on vanilla Kubernetes or Podman Desktop.
+# Uses self-signed certificates and allows unauthenticated access.
+# Connect with: openshell gateway add https://localhost:8080 --gateway-insecure
+#
+# Prerequisites:
+#   - PostgreSQL Secret with key "uri"
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellGateway
+metadata:
+  name: openshell
+spec:
+  namespace: ogo
+  replicas: 1
+  database:
+    secretName: ogo-pg
+  sandbox:
+    defaultImage: ghcr.io/nvidia/openshell-community/sandboxes/base:latest
+    workspaceStorageSize: "2Gi"
+  tls:
+    enabled: true
+  auth:
+    allowUnauthenticated: true
+    openshift:
+      enabled: false
+  route:
+    enabled: false
+  logLevel: debug
+  networkPolicy:
+    enabled: false

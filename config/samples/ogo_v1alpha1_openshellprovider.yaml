@@ -1,9 +1,13 @@
+# OpenShellProvider — Anthropic (Claude Code)
+#
+# Injects ANTHROPIC_API_KEY into sandbox pods so Claude Code can connect
+# to the Anthropic API from inside the sandbox.
+#
+# Create the secret first:
+#   oc create secret generic anthropic-secret -n ogo --from-literal=api-key=sk-ant-...
 apiVersion: gateway.ogo.aknochow.io/v1alpha1
 kind: OpenShellProvider
 metadata:
-  labels:
-    app.kubernetes.io/name: ogo
-    app.kubernetes.io/managed-by: kustomize
   name: claude-code
   namespace: ogo
 spec:
