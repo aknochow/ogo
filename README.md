@@ -1,205 +1,59 @@
-# OGO — OpenShift Gateway Operator
+---
+type: Index
+title: OGO Documentation
+description: OpenShell Gateway Operator — deploy and manage OpenShell on OpenShift.
+---
 
-An OpenShift-first Kubernetes operator for deploying and managing
-[NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) Gateway instances.
+# OGO — OpenShell Gateway Operator
 
-OpenShell provides safe, policy-enforced sandboxed environments for autonomous
-AI agents. OGO automates the full deployment lifecycle on OpenShift — TLS
-certificate management, SCC bindings, Route creation, RBAC, and status
-reporting — so you can run a persistent gateway that CI jobs and developers
-connect to remotely.
+OGO is a Kubernetes operator that deploys and manages [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell)
+gateway instances on OpenShift. It handles TLS, authentication, ingress, and
+sandbox lifecycle so you can run AI coding agents in isolated cloud sandboxes.
 
-## Architecture
+## Concepts
 
-```
-Cluster (OpenShift or Kubernetes)
-├── ogo namespace
-│   ├── OGO controller pod
-│   ├── OpenShellGateway CR (cluster-scoped singleton)
-│   │   └── Reconciles: Deployment, Service, Route, ConfigMap,
-│   │       TLS Secrets, JWT Keys, RBAC, SCC, NetworkPolicy
-│   ├── OpenShellProvider CRs (credential bundles)
-│   ├── OpenShellPolicy CRs (sandbox policy templates)
-│   ├── Gateway pod (NVIDIA OpenShell)
-│   └── Sandbox pods (created by the gateway at runtime)
-```
+Core building blocks of an OGO deployment.
 
-**Single gateway per cluster.** Multi-tenancy is handled by OpenShell's
-built-in namespace system ([RFC #1977](https://github.com/NVIDIA/OpenShell/pull/1980)),
-not by deploying multiple gateways.
+- [Gateway](docs/concepts/gateway.md) — the central gRPC server that manages sandboxes
+- [Sandbox](docs/concepts/sandbox.md) — isolated compute pods where agents run
+- [Provider](docs/concepts/provider.md) — API credentials injected into sandboxes
+- [Policy](docs/concepts/policy.md) — network, filesystem, and process controls for sandboxes
 
-## Prerequisites
+## Guides
 
-- OpenShift 4.18+ (or CRC with OpenShift preset for local development)
-- Podman 4.0+
-- `oc` CLI
-- PostgreSQL database (CloudNativePG recommended)
-- [Agent Sandbox CRD](https://github.com/kubernetes-sigs/agent-sandbox) installed on the cluster
+Step-by-step walkthroughs.
 
-## Quick Start
+- [Quickstart](docs/guides/quickstart.md) — deploy OGO on OpenShift in 10 minutes
+- [Envoy Gateway](docs/guides/envoy-gateway.md) — gRPC ingress with Let's Encrypt TLS
+- [OpenShift SSO](docs/guides/openshift-sso.md) — "Log in with OpenShift" for the CLI
 
-### 1. Install the Sandbox CRD
+## Reference
 
-```sh
-oc apply -f https://github.com/kubernetes-sigs/agent-sandbox/releases/latest/download/manifest.yaml
-```
+CRD specifications and field-level documentation.
 
-### 2. Deploy the operator
+- [OpenShellGateway](docs/reference/openshellgateway.md) — gateway CRD reference
+- [OpenShellProvider](docs/reference/openshellprovider.md) — provider CRD reference
+- [OpenShellPolicy](docs/reference/openshellpolicy.md) — policy CRD reference
 
-```sh
-make deploy IMG=quay.io/aknochow/ogo:v0.1.0
-```
+## Examples
 
-### 3. Create a PostgreSQL database
+Ready-to-use configurations.
 
-Using CloudNativePG:
-
-```yaml
-apiVersion: postgresql.cnpg.io/v1
-kind: Cluster
-metadata:
-  name: openshell-pg
-  namespace: ogo
-spec:
-  instances: 1
-  storage:
-    size: 1Gi
-  bootstrap:
-    initdb:
-      database: openshell
-      owner: openshell
-```
-
-### 4. Create the gateway
-
-```yaml
-apiVersion: gateway.ogo.io/v1alpha1
-kind: OpenShellGateway
-metadata:
-  name: openshell
-spec:
-  namespace: ogo
-  database:
-    secretName: openshell-pg-app
-  sandbox:
-    defaultImage: quay.io/aap/carbonite:latest
-  tls:
-    enabled: true
-    certManager:
-      enabled: true
-      issuerName: letsencrypt
-  route:
-    hostname: openshell.apps.example.com
-```
-
-### 5. Check status
-
-```sh
-oc get openshellgateways
-```
-
-```
-NAME        PHASE     URL                                          AGE
-openshell   Running   https://openshell.apps.example.com:443       5m
-```
-
-### 6. Connect remotely
-
-```sh
-# Extract client certificates
-oc get secret openshell-client-tls -n ogo -o jsonpath='{.data.tls\.crt}' | base64 -d > client.crt
-oc get secret openshell-client-tls -n ogo -o jsonpath='{.data.tls\.key}' | base64 -d > client.key
-oc get secret openshell-client-tls -n ogo -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
-
-# Register the gateway
-OPENSHELL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/openshell"
-mkdir -p "$OPENSHELL_DIR/gateways/my-cluster"
-cp client.crt "$OPENSHELL_DIR/gateways/my-cluster/tls.crt"
-cp client.key "$OPENSHELL_DIR/gateways/my-cluster/tls.key"
-cp ca.crt "$OPENSHELL_DIR/gateways/my-cluster/ca.crt"
-openshell gateway add https://openshell.apps.example.com --name my-cluster --local
-
-# Create a sandbox
-openshell sandbox create --gateway my-cluster -- claude
-```
-
-## CRDs
-
-| CRD | Scope | API Group | Description |
-|-----|-------|-----------|-------------|
-| `OpenShellGateway` | Cluster | `gateway.ogo.io` | Singleton — deploys and manages the OpenShell Gateway |
-| `OpenShellProvider` | Namespaced | `gateway.ogo.io` | Credential bundles for AI providers (Anthropic, GitHub, etc.) |
-| `OpenShellPolicy` | Namespaced | `gateway.ogo.io` | Sandbox policy templates (network, filesystem, process) |
-
-## TLS Configuration
-
-OGO supports three TLS modes for the gateway server certificate:
-
-| Mode | Configuration | Use Case |
-|------|--------------|----------|
-| **cert-manager** (recommended) | `tls.certManager.enabled: true` | Production — uses your cluster's cert-manager with Let's Encrypt or other issuers |
-| **Self-signed** (default) | `tls.enabled: true` | Development — operator generates a self-signed CA, server cert, and client cert |
-| **User-provided** | `tls.serverCertSecretName: my-cert` | Bring your own certificate |
-
-Client mTLS certificates are always generated by the operator for authentication.
-
-## What OGO Manages
-
-When you create an `OpenShellGateway` CR, the operator creates and manages:
-
-| Resource | Purpose |
-|----------|---------|
-| Namespace | Gateway and sandbox pod namespace |
-| ServiceAccounts | Gateway SA + sandbox SA |
-| ClusterRole + Binding | TokenReview, node access |
-| Role + Binding | Sandbox CRD CRUD, pod/event access |
-| TLS Secrets | Server cert, client cert, CA (shared) |
-| JWT Secret | Ed25519 signing keys for sandbox tokens |
-| ConfigMap | `gateway.toml` configuration |
-| Deployment | Gateway pods |
-| Service | ClusterIP with gRPC + metrics |
-| NetworkPolicy | Restricts sandbox SSH to gateway pods |
-| Route | TLS passthrough (OpenShift only) |
-| SCC Binding | Privileged SCC for sandbox SA (OpenShift only) |
+- [Claude Code + Anthropic](docs/examples/claude-code.md) — direct Anthropic API access
+- [Claude Code + Vertex AI](docs/examples/vertex-ai.md) — Google Vertex AI inference
+- [Developer Policy](docs/examples/developer-policy.md) — GitHub, PyPI, npm access
 
 ## Development
 
-### Prerequisites
-
-- Go 1.24+
-- Podman
-- operator-sdk
-- Access to an OpenShift cluster
-
-### Build
-
-```sh
+```bash
 make build          # Build the binary
 make test           # Run unit and integration tests
-make image-build    # Build container image (podman)
-make image-push     # Push to registry
-make deploy         # Deploy to cluster
-make undeploy       # Remove from cluster
+make manifests      # Regenerate CRDs and RBAC
+make generate       # Regenerate deepcopy functions
 ```
 
-### Local development with Podman Desktop
-
-Install [Podman Desktop](https://podman-desktop.io/) with the CRC extension
-(OpenShift preset) for a full local OpenShift cluster.
-
-```sh
-make run            # Run operator locally against current cluster
-```
-
-## OLMv1 Compliance
-
-OGO is designed for OLMv1 (OpenShift 4.18+ and OpenShift 5):
-
-- AllNamespaces install mode
-- No webhooks
-- No bundle-level dependencies
-- Explicit ServiceAccount with RBAC
-- File-based catalog support
+See [CLAUDE.md](CLAUDE.md) for versioning rules, image ownership, and build pipeline.
+See [AGENTS.md](AGENTS.md) for AI agent instructions.
 
 ## License
 
