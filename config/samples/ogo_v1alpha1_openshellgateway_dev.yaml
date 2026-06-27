@@ -1,8 +1,12 @@
-# OpenShellGateway — dev/local config with self-signed TLS (no auth-bridge)
+# OpenShellGateway — dev/local config (cluster-internal only)
 #
-# For local testing on vanilla Kubernetes or Podman Desktop.
-# Uses self-signed certificates and allows unauthenticated access.
-# Connect with: openshell gateway add https://localhost:8080 --gateway-insecure
+# For development and testing inside a Kubernetes cluster.
+# No external Route is created — access via port-forward only:
+#   oc port-forward svc/openshell -n ogo 8080:8080
+#   openshell gateway add https://localhost:8080 --gateway-insecure --name dev
+#
+# Uses self-signed TLS and mTLS client certificates for authentication.
+# Extract client certs from the openshell-client-tls Secret.
 #
 # Prerequisites:
 #   - PostgreSQL Secret with key "uri"
@@ -21,7 +25,6 @@ spec:
   tls:
     enabled: true
   auth:
-    allowUnauthenticated: true
     openshift:
       enabled: false
   route:

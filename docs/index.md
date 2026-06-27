@@ -16,6 +16,7 @@ Core building blocks of an OGO deployment.
 
 - [Gateway](concepts/gateway.md) — the central gRPC server that manages sandboxes
 - [Sandbox](concepts/sandbox.md) — isolated compute pods where agents run
+- [Authentication](concepts/authentication.md) — how users and sandboxes authenticate
 - [Provider](concepts/provider.md) — API credentials injected into sandboxes
 - [Policy](concepts/policy.md) — network, filesystem, and process controls for sandboxes
 
