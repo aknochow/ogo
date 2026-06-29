@@ -70,23 +70,13 @@ ogo-catalog-push: ## Push catalog image
 .PHONY: deploy-olm
 deploy-olm: ## Deploy OGO via OLMv1 (ClusterCatalog + ClusterExtension)
 	@echo "Deploying OGO via OLMv1 with catalog $(OGO_CATALOG_IMG)..."
-	@oc apply -f - <<< '{ \
-		"apiVersion": "olm.operatorframework.io/v1", \
-		"kind": "ClusterCatalog", \
-		"metadata": {"name": "ogo"}, \
-		"spec": {"source": {"type": "Image", "image": {"ref": "$(OGO_CATALOG_IMG)", "pollIntervalMinutes": 10}}} \
-	}'
+	-oc create namespace ogo 2>/dev/null || true
+	-oc create serviceaccount ogo-installer -n ogo 2>/dev/null || true
+	-oc adm policy add-cluster-role-to-user cluster-admin system:serviceaccount:ogo:ogo-installer 2>/dev/null || true
+	oc apply -f /dev/stdin <<< '{"apiVersion":"olm.operatorframework.io/v1","kind":"ClusterCatalog","metadata":{"name":"ogo"},"spec":{"source":{"type":"Image","image":{"ref":"$(OGO_CATALOG_IMG)","pollIntervalMinutes":10}}}}'
 	@echo "Waiting for catalog to be serving..."
-	@oc wait --for=condition=Serving clustercatalog/ogo --timeout=120s
-	@oc apply -f - <<< '{ \
-		"apiVersion": "olm.operatorframework.io/v1", \
-		"kind": "ClusterExtension", \
-		"metadata": {"name": "ogo"}, \
-		"spec": { \
-			"source": {"sourceType": "Catalog", "catalog": {"packageName": "ogo"}}, \
-			"install": {"namespace": "ogo", "serviceAccount": {"name": "ogo-controller-manager"}} \
-		} \
-	}'
+	oc wait --for=condition=Serving clustercatalog/ogo --timeout=120s
+	oc apply -f /dev/stdin <<< '{"apiVersion":"olm.operatorframework.io/v1","kind":"ClusterExtension","metadata":{"name":"ogo"},"spec":{"namespace":"ogo","serviceAccount":{"name":"ogo-installer"},"source":{"sourceType":"Catalog","catalog":{"packageName":"ogo"}}}}'
 	@echo "OLMv1 deployment created. Check: oc get clusterextension ogo"
 
 .PHONY: clean-olm
@@ -94,6 +84,7 @@ clean-olm: ## Remove OLMv1 deployment (ClusterExtension + ClusterCatalog)
 	@echo "Cleaning up OLMv1 deployment..."
 	-oc delete clusterextension ogo 2>/dev/null || true
 	-oc delete clustercatalog ogo 2>/dev/null || true
+	-oc delete clusterrolebinding cluster-admin-ogo-installer 2>/dev/null || true
 	@echo "OLMv1 cleanup complete"
 
 ##@ OGO Full Pipeline
