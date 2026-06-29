@@ -80,6 +80,7 @@ spec:
                         default: 8h
                         description: TokenTTL is the duration (e.g. "8h", "24h") that
                           OIDC tokens are valid.
+                        pattern: ^[0-9]+(h|m|s)$
                         type: string
                     type: object
                 type: object
@@ -259,7 +260,8 @@ spec:
                   workspaceStorageSize:
                     default: 2Gi
                     description: WorkspaceStorageSize is the PVC size for sandbox
-                      workspace volumes.
+                      workspace volumes (e.g. "2Gi", "10Gi").
+                    pattern: ^[0-9]+(Ki|Mi|Gi|Ti)$
                     type: string
                 type: object
               supervisorImage:

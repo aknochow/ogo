@@ -129,7 +129,7 @@ metadata:
         }
       ]
     capabilities: Full Lifecycle
-    createdAt: "2026-06-29T15:33:30Z"
+    createdAt: "2026-06-29T21:23:47Z"
     operators.operatorframework.io/builder: operator-sdk-v1.42.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: ogo.v0.1.0
@@ -415,7 +415,7 @@ spec:
                 - --health-probe-bind-address=:8081
                 command:
                 - /manager
-                image: quay.io/aknochow/ogo:0.1.0-20260629113328
+                image: quay.io/aknochow/ogo:v0.1.0
                 livenessProbe:
                   httpGet:
                     path: /healthz
