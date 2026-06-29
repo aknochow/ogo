@@ -147,6 +147,7 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		{"RoleBinding", r.reconcileRoleBinding},
 		{"TLS", r.reconcileTLS},
 		{"JWTKeys", r.reconcileJWTKeys},
+		{"AuthBridgeKeys", r.reconcileAuthBridgeKeys},
 		{"ConfigMap", r.reconcileConfigMap},
 		{"Deployment", r.reconcileDeployment},
 		{"Service", r.reconcileService},
@@ -521,6 +522,30 @@ func (r *OpenShellGatewayReconciler) reconcileJWTKeys(ctx context.Context, gw *o
 	return r.Create(ctx, secret)
 }
 
+// --- Auth Bridge Keys ---
+
+func (r *OpenShellGatewayReconciler) reconcileAuthBridgeKeys(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	ns := gatewayNamespace(gw)
+	secretName := gw.Name + "-auth-bridge-keys"
+
+	existing := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing); err == nil {
+		return nil
+	}
+
+	keys, err := pki.GenerateJWTKeys()
+	if err != nil {
+		return fmt.Errorf("generating auth-bridge keys: %w", err)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns, Labels: gatewayLabels(gw)},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{"signing.pem": keys.SigningKey, "public.pem": keys.PublicKey, "kid": []byte(keys.KID)},
+	}
+	return r.Create(ctx, secret)
+}
+
 // --- ConfigMap ---
 
 func (r *OpenShellGatewayReconciler) reconcileConfigMap(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
@@ -633,6 +658,9 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 			{Name: "sandbox-jwt", VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{SecretName: gw.Name + "-jwt-keys", DefaultMode: ptr.To(int32(0400))},
 			}},
+			{Name: "auth-bridge-keys", VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{SecretName: gw.Name + "-auth-bridge-keys", DefaultMode: ptr.To(int32(0400))},
+			}},
 		}
 
 		if tlsEnabled {
@@ -676,6 +704,12 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 					}},
 					{Name: "AUTH_BRIDGE_ADMIN_GROUP", Value: gw.Spec.Auth.OpenShift.AdminGroup},
 					{Name: "AUTH_BRIDGE_TOKEN_TTL", Value: tokenTTL(gw)},
+					{Name: "AUTH_BRIDGE_SIGNING_KEY", Value: "/etc/auth-bridge-keys/signing.pem"},
+					{Name: "AUTH_BRIDGE_PUBLIC_KEY", Value: "/etc/auth-bridge-keys/public.pem"},
+					{Name: "AUTH_BRIDGE_KID", Value: "/etc/auth-bridge-keys/kid"},
+				},
+				VolumeMounts: []corev1.VolumeMount{
+					{Name: "auth-bridge-keys", MountPath: "/etc/auth-bridge-keys", ReadOnly: true},
 				},
 				Ports: []corev1.ContainerPort{
 					{Name: "auth", ContainerPort: 8085, Protocol: corev1.ProtocolTCP},
