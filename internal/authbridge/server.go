@@ -99,7 +99,7 @@ func (s *Server) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) isAllowedRedirectURI(uri string) bool {
 	if uri == "" {
-		return true
+		return false
 	}
 	u, err := url.Parse(uri)
 	if err != nil || u.Host == "" {
@@ -113,7 +113,7 @@ func (s *Server) isAllowedRedirectURI(uri string) bool {
 	}
 	if s.config.ExternalIssuer != "" {
 		allowed, err := url.Parse(s.config.ExternalIssuer)
-		if err == nil && u.Host == allowed.Host {
+		if err == nil && u.Host == allowed.Host && strings.HasPrefix(u.Path, "/callback") {
 			return true
 		}
 	}
