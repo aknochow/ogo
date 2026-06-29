@@ -40,6 +40,17 @@ var _ = Describe("OpenShellGateway Controller", func() {
 	gwKey := types.NamespacedName{Name: gwName}
 
 	BeforeEach(func() {
+		// Ensure namespace exists
+		ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ogo-test"}}
+		_ = k8sClient.Create(ctx, ns)
+
+		// Ensure database Secret exists
+		dbSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "test-pg-uri", Namespace: "ogo-test"},
+			Data:       map[string][]byte{"uri": []byte("postgresql://test:test@localhost:5432/test")},
+		}
+		_ = k8sClient.Create(ctx, dbSecret)
+
 		gw := &ogov1alpha1.OpenShellGateway{}
 		err := k8sClient.Get(ctx, gwKey, gw)
 		if err != nil && errors.IsNotFound(err) {

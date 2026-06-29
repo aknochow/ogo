@@ -136,6 +136,12 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	log.Info("Reconciling OpenShellGateway", "namespace", ns, "sandbox_namespace", sandboxNS, "openshift", isOCP, "gatewayAPI", useGWAPI)
 
+	// Validate prerequisites before creating resources
+	if err := r.validateDatabaseSecret(ctx, gw); err != nil {
+		log.Error(err, "Database secret validation failed")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "DatabaseSecret", err)
+	}
+
 	steps := []struct {
 		name string
 		fn   func(context.Context, *ogov1alpha1.OpenShellGateway) error
@@ -282,6 +288,35 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 
 	controllerutil.RemoveFinalizer(gw, finalizerName)
 	return ctrl.Result{}, r.Update(ctx, gw)
+}
+
+// --- Validation ---
+
+func (r *OpenShellGatewayReconciler) validateDatabaseSecret(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	ns := gatewayNamespace(gw)
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Name: gw.Spec.Database.SecretName, Namespace: ns}, secret); err != nil {
+		if apierrors.IsNotFound(err) {
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type: ogov1alpha1.ConditionDatabaseReady, Status: metav1.ConditionFalse,
+				Reason: "SecretNotFound", Message: fmt.Sprintf("Database secret %q not found in namespace %q", gw.Spec.Database.SecretName, ns),
+			})
+			return fmt.Errorf("database secret %q not found in namespace %q", gw.Spec.Database.SecretName, ns)
+		}
+		return fmt.Errorf("checking database secret: %w", err)
+	}
+	if _, ok := secret.Data["uri"]; !ok {
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionDatabaseReady, Status: metav1.ConditionFalse,
+			Reason: "MissingKey", Message: fmt.Sprintf("Database secret %q missing required key \"uri\"", gw.Spec.Database.SecretName),
+		})
+		return fmt.Errorf("database secret %q missing required key \"uri\"", gw.Spec.Database.SecretName)
+	}
+	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+		Type: ogov1alpha1.ConditionDatabaseReady, Status: metav1.ConditionTrue,
+		Reason: "Ready", Message: "Database secret validated",
+	})
+	return nil
 }
 
 // --- Namespace ---
@@ -859,9 +894,12 @@ func (r *OpenShellGatewayReconciler) reconcileRoute(ctx context.Context, gw *ogo
 	}
 
 	existingHost, _, _ := unstructured.NestedString(existing.Object, "spec", "host")
-	if gw.Spec.Route.Hostname != "" && existingHost != gw.Spec.Route.Hostname {
+	existingTLS, _, _ := unstructured.NestedString(existing.Object, "spec", "tls", "termination")
+	needsRecreate := (gw.Spec.Route.Hostname != "" && existingHost != gw.Spec.Route.Hostname) ||
+		existingTLS != tlsTermination
+	if needsRecreate {
 		if err := r.Delete(ctx, existing); err != nil {
-			return fmt.Errorf("deleting route for hostname change: %w", err)
+			return fmt.Errorf("deleting route for spec change: %w", err)
 		}
 		route := &unstructured.Unstructured{}
 		route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
@@ -942,6 +980,16 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw
 		}
 	} else if err != nil {
 		return fmt.Errorf("getting Gateway: %w", err)
+	} else {
+		existingHostname, _, _ := unstructured.NestedString(existing.Object, "spec", "listeners", "0", "hostname")
+		existingClass, _, _ := unstructured.NestedString(existing.Object, "spec", "gatewayClassName")
+		if existingHostname != hostname || existingClass != gatewayClassName(gw) {
+			logf.FromContext(ctx).Info("Gateway spec drifted, recreating", "hostname", hostname)
+			if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("deleting drifted Gateway: %w", err)
+			}
+			return fmt.Errorf("Gateway recreating after drift — will converge on next reconcile")
+		}
 	}
 
 	grpcGVK := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GRPCRoute"}
@@ -1175,16 +1223,21 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 }
 
 func (r *OpenShellGatewayReconciler) setDegraded(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, step string, reconcileErr error) error {
+	log := logf.FromContext(ctx)
 	latest := &ogov1alpha1.OpenShellGateway{}
 	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name}, latest); err != nil {
-		return err
+		return reconcileErr
 	}
 	latest.Status.Phase = ogov1alpha1.PhaseFailed
+	latest.Status.ObservedGeneration = gw.Generation
 	meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
 		Type: ogov1alpha1.ConditionDegraded, Status: metav1.ConditionTrue,
 		Reason: "ReconcileError", Message: fmt.Sprintf("%s: %v", step, reconcileErr),
 	})
-	return r.Status().Update(ctx, latest)
+	if err := r.Status().Update(ctx, latest); err != nil {
+		log.Error(err, "Failed to update degraded status")
+	}
+	return reconcileErr
 }
 
 // --- Setup ---
