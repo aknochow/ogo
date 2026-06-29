@@ -97,8 +97,9 @@ type SandboxSpec struct {
 	// +kubebuilder:validation:Enum=Always;IfNotPresent;Never
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 
-	// WorkspaceStorageSize is the PVC size for sandbox workspace volumes.
+	// WorkspaceStorageSize is the PVC size for sandbox workspace volumes (e.g. "2Gi", "10Gi").
 	// +kubebuilder:default="2Gi"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(Ki|Mi|Gi|Ti)$`
 	WorkspaceStorageSize string `json:"workspaceStorageSize,omitempty"`
 
 	// RuntimeClassName is an optional RuntimeClass for sandbox pods (e.g. kata, gvisor).
@@ -197,6 +198,7 @@ type OpenShiftAuth struct {
 
 	// TokenTTL is the duration (e.g. "8h", "24h") that OIDC tokens are valid.
 	// +kubebuilder:default="8h"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(h|m|s)+$`
 	TokenTTL string `json:"tokenTTL,omitempty"`
 }
 

@@ -459,8 +459,14 @@ func (r *OpenShellGatewayReconciler) reconcileSelfSignedTLS(ctx context.Context,
 
 	serverSecret := &corev1.Secret{}
 	serverErr := r.Get(ctx, types.NamespacedName{Name: serverSecretName, Namespace: ns}, serverSecret)
+	if serverErr != nil && !apierrors.IsNotFound(serverErr) {
+		return fmt.Errorf("checking server TLS secret: %w", serverErr)
+	}
 	clientSecret := &corev1.Secret{}
 	clientErr := r.Get(ctx, types.NamespacedName{Name: clientSecretName, Namespace: ns}, clientSecret)
+	if clientErr != nil && !apierrors.IsNotFound(clientErr) {
+		return fmt.Errorf("checking client TLS secret: %w", clientErr)
+	}
 
 	if serverErr == nil && clientErr == nil {
 		if serverSecret.Annotations != nil && serverSecret.Annotations["ogo.aknochow.io/pki-sans-hash"] == sansHash {

@@ -39,9 +39,11 @@ type OpenShellProviderSpec struct {
 // SecretKeyRef references a key within a Secret.
 type SecretKeyRef struct {
 	// Name of the Secret.
+	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
 
 	// Key within the Secret data.
+	// +kubebuilder:validation:MinLength=1
 	Key string `json:"key"`
 }
 

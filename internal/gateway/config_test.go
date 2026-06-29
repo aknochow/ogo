@@ -114,3 +114,26 @@ func TestRenderGatewayTOML_CustomSandbox(t *testing.T) {
 		t.Error("Expected custom apparmor profile")
 	}
 }
+
+func TestRenderGatewayTOML_WithOIDC(t *testing.T) {
+	gw := &ogov1alpha1.OpenShellGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "openshell"},
+		Spec: ogov1alpha1.OpenShellGatewaySpec{
+			Namespace: "ogo",
+			Database:  ogov1alpha1.DatabaseSpec{SecretName: "pg-uri"},
+			TLS:       ogov1alpha1.TLSSpec{Enabled: ptr.To(false)},
+		},
+	}
+
+	toml := RenderGatewayTOML(gw, "ogo", "http://localhost:8085")
+
+	if !strings.Contains(toml, `[openshell.gateway.oidc]`) {
+		t.Error("Expected OIDC section")
+	}
+	if !strings.Contains(toml, `issuer        = "http://localhost:8085"`) {
+		t.Error("Expected OIDC issuer")
+	}
+	if !strings.Contains(toml, `audience      = "openshell-cli"`) {
+		t.Error("Expected OIDC audience")
+	}
+}

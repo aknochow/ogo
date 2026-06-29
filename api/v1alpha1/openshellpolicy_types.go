@@ -71,6 +71,8 @@ type NetworkEndpoint struct {
 	Host string `json:"host"`
 
 	// Port is the destination port.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
 	Port int32 `json:"port"`
 
 	// Protocol is the application protocol (rest, websocket, graphql, sql, or empty for L4).

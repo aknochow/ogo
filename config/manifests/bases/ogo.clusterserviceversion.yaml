@@ -17,7 +17,7 @@ metadata:
               "workspaceStorageSize": "2Gi",
               "appArmorProfile": "Unconfined"
             },
-            "tls": {"enabled": false, "certManager": {"issuerName": "letsencrypt", "issuerKind": "ClusterIssuer"}},
+            "tls": {"certManager": {"issuerName": "letsencrypt", "issuerKind": "ClusterIssuer"}},
             "route": {"hostname": "openshell.apps.example.com"},
             "auth": {"openshift": {"tokenTTL": "8h"}},
             "logLevel": "info",

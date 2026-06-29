@@ -47,9 +47,9 @@ spec:
 The `tokenTTL` field controls how long the JWT is valid. After expiry, the
 CLI prompts for re-authentication. The default is 8 hours.
 
-Tokens are invalidated immediately if the gateway pod restarts — the
-auth-bridge generates a new Ed25519 signing keypair on startup, so tokens
-signed by the previous keypair are rejected.
+The auth-bridge Ed25519 signing keypair is persisted in a Kubernetes Secret
+(`openshell-auth-bridge-keys`). Tokens survive pod restarts. The operator
+creates the keypair once; subsequent pod restarts load the same keys.
 
 ## OAuthClient
 

@@ -44,12 +44,23 @@ func NewServer(config Config) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Server{
+	srv := &Server{
 		config: config,
 		signer: signer,
 		osc:    NewOpenShiftClient(config.OpenShiftOAuth, config.ClientID, config.ClientSecret),
 		codes:  make(map[string]*pendingCode),
-	}, nil
+	}
+	go srv.sweepExpiredCodes()
+	return srv, nil
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Cache-Control", "no-store")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) Handler() http.Handler {
@@ -63,7 +74,7 @@ func (s *Server) Handler() http.Handler {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")
 	})
-	return mux
+	return securityHeaders(mux)
 }
 
 func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
@@ -85,7 +96,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"response_types_supported":              []string{"code"},
 		"grant_types_supported":                 []string{"authorization_code"},
 		"subject_types_supported":               []string{"public"},
-		"id_token_signing_alg_values_supported": []string{"EdDSA"},
+		"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
 		"scopes_supported":                      []string{"openid", "profile", "email"},
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -212,6 +223,11 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 
 	bridgeCode := generateCode()
 	s.codesMu.Lock()
+	if len(s.codes) >= maxPendingCodes {
+		s.codesMu.Unlock()
+		http.Error(w, "too many pending requests", http.StatusServiceUnavailable)
+		return
+	}
 	s.codes[bridgeCode] = &pendingCode{
 		jwt:       jwt,
 		expiresAt: time.Now().Add(60 * time.Second),
@@ -286,6 +302,20 @@ func (s *Server) mapRoles(groups []string) []string {
 		}
 	}
 	return roles
+}
+
+func (s *Server) sweepExpiredCodes() {
+	for {
+		time.Sleep(60 * time.Second)
+		now := time.Now()
+		s.codesMu.Lock()
+		for k, v := range s.codes {
+			if now.After(v.expiresAt) {
+				delete(s.codes, k)
+			}
+		}
+		s.codesMu.Unlock()
+	}
 }
 
 func generateCode() string {

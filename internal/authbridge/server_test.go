@@ -48,12 +48,12 @@ func TestDiscoveryEndpoint(t *testing.T) {
 	if discovery["issuer"] != "https://openshell-auth.apps.example.com" {
 		t.Errorf("issuer = %v, want external issuer", discovery["issuer"])
 	}
-	algs, ok := discovery["id_token_signing_alg_values_supported"].([]interface{})
-	if !ok || len(algs) == 0 || algs[0] != "EdDSA" {
-		t.Errorf("alg = %v, want [EdDSA]", discovery["id_token_signing_alg_values_supported"])
+	if _, hasIDToken := discovery["id_token_signing_alg_values_supported"]; hasIDToken {
+		t.Error("discovery should not advertise id_token signing (not returned)")
 	}
-	if _, hasPKCE := discovery["code_challenge_methods_supported"]; hasPKCE {
-		t.Error("discovery should not advertise PKCE (not implemented)")
+	authMethods, ok := discovery["token_endpoint_auth_methods_supported"].([]interface{})
+	if !ok || len(authMethods) == 0 || authMethods[0] != "client_secret_basic" {
+		t.Errorf("auth methods = %v, want [client_secret_basic]", discovery["token_endpoint_auth_methods_supported"])
 	}
 }
 
@@ -159,7 +159,22 @@ func TestTokenEndpointRejectsInvalidCode(t *testing.T) {
 	s := testServer(t)
 	handler := s.Handler()
 
-	form := url.Values{"code": {"invalid-code"}}
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {"invalid-code"}}
+	req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
+	}
+}
+
+func TestTokenEndpointRejectsWrongGrantType(t *testing.T) {
+	s := testServer(t)
+	handler := s.Handler()
+
+	form := url.Values{"grant_type": {"client_credentials"}, "code": {"test"}}
 	req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	w := httptest.NewRecorder()
