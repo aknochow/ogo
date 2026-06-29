@@ -25,3 +25,9 @@ go.work
 *.swp
 *.swo
 *~
+
+# Build artifacts mutated by make deploy/bundle
+config/manager/kustomization.yaml
+
+# opm-generated index Dockerfiles
+index.Dockerfile*
