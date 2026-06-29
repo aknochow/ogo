@@ -25,6 +25,7 @@ func testServer(t *testing.T) *Server {
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
+	t.Cleanup(func() { s.Close() })
 	return s
 }
 
@@ -202,6 +203,27 @@ func TestPendingCodesCapEnforced(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503 when codes map is full", w.Code)
+	}
+}
+
+func TestSecurityHeaders(t *testing.T) {
+	s := testServer(t)
+	handler := s.Handler()
+
+	endpoints := []string{"/.well-known/openid-configuration", "/jwks", "/healthz"}
+	for _, ep := range endpoints {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest("GET", ep, nil))
+
+		if w.Header().Get("X-Content-Type-Options") != "nosniff" {
+			t.Errorf("%s: missing X-Content-Type-Options", ep)
+		}
+		if w.Header().Get("X-Frame-Options") != "DENY" {
+			t.Errorf("%s: missing X-Frame-Options", ep)
+		}
+		if w.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: missing Cache-Control", ep)
+		}
 	}
 }
 

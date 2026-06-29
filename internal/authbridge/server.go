@@ -31,6 +31,7 @@ type Server struct {
 	osc     *OpenShiftClient
 	codes   map[string]*pendingCode
 	codesMu sync.Mutex
+	done    chan struct{}
 }
 
 type pendingCode struct {
@@ -49,9 +50,14 @@ func NewServer(config Config) (*Server, error) {
 		signer: signer,
 		osc:    NewOpenShiftClient(config.OpenShiftOAuth, config.ClientID, config.ClientSecret),
 		codes:  make(map[string]*pendingCode),
+		done:   make(chan struct{}),
 	}
 	go srv.sweepExpiredCodes()
 	return srv, nil
+}
+
+func (s *Server) Close() {
+	close(s.done)
 }
 
 func securityHeaders(next http.Handler) http.Handler {
@@ -305,16 +311,22 @@ func (s *Server) mapRoles(groups []string) []string {
 }
 
 func (s *Server) sweepExpiredCodes() {
+	ticker := time.NewTicker(60 * time.Second)
+	defer ticker.Stop()
 	for {
-		time.Sleep(60 * time.Second)
-		now := time.Now()
-		s.codesMu.Lock()
-		for k, v := range s.codes {
-			if now.After(v.expiresAt) {
-				delete(s.codes, k)
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			now := time.Now()
+			s.codesMu.Lock()
+			for k, v := range s.codes {
+				if now.After(v.expiresAt) {
+					delete(s.codes, k)
+				}
 			}
+			s.codesMu.Unlock()
 		}
-		s.codesMu.Unlock()
 	}
 }
 

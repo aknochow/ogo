@@ -198,7 +198,7 @@ type OpenShiftAuth struct {
 
 	// TokenTTL is the duration (e.g. "8h", "24h") that OIDC tokens are valid.
 	// +kubebuilder:default="8h"
-	// +kubebuilder:validation:Pattern=`^[0-9]+(h|m|s)+$`
+	// +kubebuilder:validation:Pattern=`^[0-9]+(h|m|s)$`
 	TokenTTL string `json:"tokenTTL,omitempty"`
 }
 

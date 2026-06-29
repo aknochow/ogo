@@ -63,9 +63,11 @@ spec:
                   properties:
                     key:
                       description: Key within the Secret data.
+                      minLength: 1
                       type: string
                     name:
                       description: Name of the Secret.
+                      minLength: 1
                       type: string
                   required:
                   - key

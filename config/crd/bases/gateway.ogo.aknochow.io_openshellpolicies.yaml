@@ -116,6 +116,8 @@ spec:
                           port:
                             description: Port is the destination port.
                             format: int32
+                            maximum: 65535
+                            minimum: 1
                             type: integer
                           protocol:
                             description: Protocol is the application protocol (rest,
