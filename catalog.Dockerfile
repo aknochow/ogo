@@ -4,7 +4,7 @@ RUN ["/bin/opm", "serve", "/configs", "--cache-dir=/tmp/cache", "--cache-only"]
 
 FROM quay.io/operator-framework/opm:latest
 COPY --from=builder /configs /configs
-COPY --from=builder /tmp/cache /tmp/cache
+COPY --chown=65532:65532 --from=builder /tmp/cache /tmp/cache
 EXPOSE 50051
 USER 65532:65532
 ENTRYPOINT ["/bin/opm"]
