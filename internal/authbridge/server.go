@@ -196,14 +196,14 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	callbackURL := s.config.ExternalIssuer + "/callback"
-	tokenResp, err := s.osc.ExchangeCode(code, callbackURL)
+	tokenResp, err := s.osc.ExchangeCode(r.Context(), code, callbackURL)
 	if err != nil {
 		log.Printf("token exchange failed: %v", err)
 		http.Error(w, "authentication failed", http.StatusInternalServerError)
 		return
 	}
 
-	userInfo, err := s.osc.GetUserInfo(tokenResp.AccessToken)
+	userInfo, err := s.osc.GetUserInfo(r.Context(), tokenResp.AccessToken)
 	if err != nil {
 		log.Printf("user info failed: %v", err)
 		http.Error(w, "failed to get user info", http.StatusInternalServerError)

@@ -31,6 +31,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -544,49 +545,27 @@ func (r *OpenShellGatewayReconciler) reconcileSelfSignedTLS(ctx context.Context,
 // --- JWT Keys ---
 
 func (r *OpenShellGatewayReconciler) reconcileJWTKeys(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
-	ns := gatewayNamespace(gw)
-	secretName := gw.Name + "-jwt-keys"
-
-	existing := &corev1.Secret{}
-	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("checking JWT keys secret: %w", err)
-	}
-
-	keys, err := pki.GenerateJWTKeys()
-	if err != nil {
-		return fmt.Errorf("generating JWT keys: %w", err)
-	}
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns, Labels: gatewayLabels(gw)},
-		Type:       corev1.SecretTypeOpaque,
-		Data:       map[string][]byte{"signing.pem": keys.SigningKey, "public.pem": keys.PublicKey, "kid": []byte(keys.KID)},
-	}
-	return r.Create(ctx, secret)
+	return r.ensureEd25519KeySecret(ctx, gw, gw.Name+"-jwt-keys")
 }
 
-// --- Auth Bridge Keys ---
-
 func (r *OpenShellGatewayReconciler) reconcileAuthBridgeKeys(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
-	ns := gatewayNamespace(gw)
-	secretName := gw.Name + "-auth-bridge-keys"
+	return r.ensureEd25519KeySecret(ctx, gw, gw.Name+"-auth-bridge-keys")
+}
 
+func (r *OpenShellGatewayReconciler) ensureEd25519KeySecret(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, secretName string) error {
+	ns := gatewayNamespace(gw)
 	existing := &corev1.Secret{}
 	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing)
 	if err == nil {
 		return nil
 	}
 	if !apierrors.IsNotFound(err) {
-		return fmt.Errorf("checking auth-bridge keys secret: %w", err)
+		return fmt.Errorf("checking key secret %s: %w", secretName, err)
 	}
 
 	keys, err := pki.GenerateJWTKeys()
 	if err != nil {
-		return fmt.Errorf("generating auth-bridge keys: %w", err)
+		return fmt.Errorf("generating keys for %s: %w", secretName, err)
 	}
 
 	secret := &corev1.Secret{
@@ -768,6 +747,25 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 				LivenessProbe: &corev1.Probe{
 					ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromString("auth")}},
 					PeriodSeconds: 10,
+				},
+				ReadinessProbe: &corev1.Probe{
+					ProbeHandler:        corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromString("auth")}},
+					InitialDelaySeconds: 1, PeriodSeconds: 5,
+				},
+				StartupProbe: &corev1.Probe{
+					ProbeHandler:     corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromString("auth")}},
+					PeriodSeconds:    2,
+					FailureThreshold: 15,
+				},
+				Resources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("10m"),
+						corev1.ResourceMemory: resource.MustParse("32Mi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("100m"),
+						corev1.ResourceMemory: resource.MustParse("128Mi"),
+					},
 				},
 				SecurityContext: &corev1.SecurityContext{
 					AllowPrivilegeEscalation: ptr.To(false),

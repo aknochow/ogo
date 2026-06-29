@@ -1,6 +1,7 @@
 package authbridge
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -52,14 +53,14 @@ type TokenResponse struct {
 	RefreshToken string `json:"refresh_token,omitempty"`
 }
 
-func (c *OpenShiftClient) ExchangeCode(code, redirectURI string) (*TokenResponse, error) {
+func (c *OpenShiftClient) ExchangeCode(ctx context.Context, code, redirectURI string) (*TokenResponse, error) {
 	data := url.Values{
 		"grant_type":   {"authorization_code"},
 		"code":         {code},
 		"redirect_uri": {redirectURI},
 	}
 
-	req, err := http.NewRequest("POST", c.TokenURL(), strings.NewReader(data.Encode()))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.TokenURL(), strings.NewReader(data.Encode()))
 	if err != nil {
 		return nil, fmt.Errorf("creating token request: %w", err)
 	}
@@ -90,14 +91,14 @@ type UserInfo struct {
 	Groups []string `json:"groups"`
 }
 
-func (c *OpenShiftClient) GetUserInfo(accessToken string) (*UserInfo, error) {
+func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string) (*UserInfo, error) {
 	apiURL := os.Getenv("KUBERNETES_API_URL")
 	if apiURL == "" {
 		apiURL = "https://kubernetes.default.svc:443"
 	}
 	apiURL = strings.TrimRight(apiURL, "/")
 
-	req, err := http.NewRequest("GET", apiURL+"/apis/user.openshift.io/v1/users/~", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL+"/apis/user.openshift.io/v1/users/~", nil)
 	if err != nil {
 		return nil, err
 	}
