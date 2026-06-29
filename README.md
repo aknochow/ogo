@@ -6,7 +6,11 @@ description: OpenShell Gateway Operator — deploy and manage OpenShell on OpenS
 
 # OGO — OpenShell Gateway Operator
 
-OGO is a Kubernetes operator that deploys and manages [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell)
+> **Alpha software.** OGO and [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell)
+> are both in active development. APIs, CRDs, and behavior may change without
+> notice. This project is not intended for production use.
+
+OGO is a Kubernetes operator that deploys and manages NVIDIA OpenShell
 gateway instances on OpenShift. It handles TLS, authentication, ingress, and
 sandbox lifecycle so you can run AI coding agents in isolated cloud sandboxes.
 
