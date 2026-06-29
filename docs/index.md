@@ -18,6 +18,7 @@ lifecycle so you can run AI coding agents in isolated cloud sandboxes.
 
 Core building blocks of an OGO deployment.
 
+- [Why OpenShift](concepts/why-openshift.md) — security and platform features for AI agent workloads
 - [Gateway](concepts/gateway.md) — the central gRPC server that manages sandboxes
 - [Sandbox](concepts/sandbox.md) — isolated compute pods where agents run
 - [Authentication](concepts/authentication.md) — how users and sandboxes authenticate

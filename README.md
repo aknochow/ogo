@@ -14,6 +14,30 @@ OGO is an OpenShift operator that deploys and manages NVIDIA OpenShell
 gateway instances. It handles TLS, authentication, ingress, and sandbox
 lifecycle so you can run AI coding agents in isolated cloud sandboxes.
 
+## Why OpenShift?
+
+AI coding agents run arbitrary code in sandboxes — that's an inherently
+adversarial workload. OpenShift provides the security stack that makes
+this safe:
+
+- **Security Context Constraints (SCC)** — enforce non-root execution,
+  drop dangerous capabilities, and apply seccomp profiles on sandbox pods
+- **SELinux** — mandatory access control that agent code cannot bypass,
+  even with container escapes
+- **OVN-Kubernetes network policy** — kernel-level egress enforcement for
+  sandbox network policies, not bypassable from userspace
+- **Integrated OAuth** — user identity tied to your organization's SSO,
+  not self-managed tokens
+- **cert-manager operator** — managed TLS lifecycle with Let's Encrypt
+- **Audit logging** — full audit trail of sandbox API activity
+- **Operator Lifecycle Manager** — managed operator installs with
+  console integration
+
+Vanilla Kubernetes provides none of these out of the box. Running untrusted
+agent workloads without these controls is not recommended.
+
+See [Why OpenShift](docs/concepts/why-openshift.md) for details.
+
 ## Concepts
 
 Core building blocks of an OGO deployment.
