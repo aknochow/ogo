@@ -13,7 +13,7 @@ set -euo pipefail
 #   ./scripts/connect-gateway.sh rdu openshell ~/.kube/rdu
 
 GATEWAY_NAME="${1:-openshell}"
-NAMESPACE="${2:-openshell}"
+NAMESPACE="${2:-ogo}"
 KUBECONFIG_PATH="${3:-}"
 
 KUBECTL="oc"

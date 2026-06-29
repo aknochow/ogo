@@ -31,7 +31,7 @@ import (
 )
 
 // namespace where the project is deployed in
-const namespace = "ogo-system"
+const namespace = "ogo"
 
 // serviceAccountName created for the project
 const serviceAccountName = "ogo-controller-manager"
