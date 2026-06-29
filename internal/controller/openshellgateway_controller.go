@@ -1314,6 +1314,8 @@ func (r *OpenShellGatewayReconciler) reconcileOAuthClient(ctx context.Context, g
 
 func generateOAuthSecret() string {
 	b := make([]byte, 24)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("crypto/rand failed: %v", err))
+	}
 	return fmt.Sprintf("%x", b)
 }

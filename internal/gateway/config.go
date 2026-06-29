@@ -67,8 +67,12 @@ func RenderGatewayTOML(gw *ogov1alpha1.OpenShellGateway, sandboxNS string, oidcI
 	}
 
 	b.WriteString("\n[openshell.drivers.kubernetes]\n")
+	gwNS := gw.Spec.Namespace
+	if gwNS == "" {
+		gwNS = "ogo"
+	}
 	fmt.Fprintf(&b, "grpc_endpoint                = %q\n",
-		fmt.Sprintf("%s://%s.%s.svc.cluster.local:8080", scheme, gw.Name, gw.Spec.Namespace))
+		fmt.Sprintf("%s://%s.%s.svc.cluster.local:8080", scheme, gw.Name, gwNS))
 	fmt.Fprintf(&b, "service_account_name         = %q\n", gw.Name+"-sandbox")
 	b.WriteString("supervisor_sideload_method   = \"init-container\"\n")
 	b.WriteString("sa_token_ttl_secs            = 3600\n")
