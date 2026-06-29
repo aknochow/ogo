@@ -68,24 +68,27 @@ ogo-catalog-push: ## Push catalog image
 ##@ OGO OLMv1 Deployment
 
 .PHONY: deploy-olm
-deploy-olm: ## Deploy OGO via OLMv1 (ClusterCatalog + ClusterExtension)
-	@echo "Deploying OGO via OLMv1 with catalog $(OGO_CATALOG_IMG)..."
+deploy-olm: ## Deploy OGO via OLM (CatalogSource + Subscription)
+	@echo "Deploying OGO via OLM with catalog $(OGO_CATALOG_IMG)..."
 	-oc create namespace ogo 2>/dev/null || true
-	-oc create serviceaccount ogo-installer -n ogo 2>/dev/null || true
-	-oc adm policy add-cluster-role-to-user cluster-admin system:serviceaccount:ogo:ogo-installer 2>/dev/null || true
-	oc apply -f /dev/stdin <<< '{"apiVersion":"olm.operatorframework.io/v1","kind":"ClusterCatalog","metadata":{"name":"ogo"},"spec":{"source":{"type":"Image","image":{"ref":"$(OGO_CATALOG_IMG)","pollIntervalMinutes":10}}}}'
-	@echo "Waiting for catalog to be serving..."
-	oc wait --for=condition=Serving clustercatalog/ogo --timeout=120s
-	oc apply -f /dev/stdin <<< '{"apiVersion":"olm.operatorframework.io/v1","kind":"ClusterExtension","metadata":{"name":"ogo"},"spec":{"namespace":"ogo","serviceAccount":{"name":"ogo-installer"},"source":{"sourceType":"Catalog","catalog":{"packageName":"ogo"}}}}'
-	@echo "OLMv1 deployment created. Check: oc get clusterextension ogo"
+	@echo "Creating CatalogSource..."
+	oc apply -f /dev/stdin <<< '{"apiVersion":"operators.coreos.com/v1alpha1","kind":"CatalogSource","metadata":{"name":"ogo-catalog","namespace":"openshift-marketplace"},"spec":{"sourceType":"grpc","image":"$(OGO_CATALOG_IMG)","displayName":"OpenShell Gateway Operator","publisher":"aknochow","updateStrategy":{"registryPoll":{"interval":"30m"}}}}'
+	@echo "Waiting for catalog pod..."
+	@sleep 15
+	@echo "Creating OperatorGroup..."
+	oc apply -f /dev/stdin <<< '{"apiVersion":"operators.coreos.com/v1","kind":"OperatorGroup","metadata":{"name":"ogo-operator-group","namespace":"ogo"},"spec":{}}'
+	@echo "Creating Subscription..."
+	oc apply -f /dev/stdin <<< '{"apiVersion":"operators.coreos.com/v1alpha1","kind":"Subscription","metadata":{"name":"ogo","namespace":"ogo"},"spec":{"channel":"alpha","name":"ogo","source":"ogo-catalog","sourceNamespace":"openshift-marketplace","installPlanApproval":"Automatic"}}'
+	@echo "OLM deployment created. Check: oc get csv -n ogo"
 
 .PHONY: clean-olm
-clean-olm: ## Remove OLMv1 deployment (ClusterExtension + ClusterCatalog)
-	@echo "Cleaning up OLMv1 deployment..."
-	-oc delete clusterextension ogo 2>/dev/null || true
-	-oc delete clustercatalog ogo 2>/dev/null || true
-	-oc delete clusterrolebinding cluster-admin-ogo-installer 2>/dev/null || true
-	@echo "OLMv1 cleanup complete"
+clean-olm: ## Remove OLM deployment (Subscription, CSV, CatalogSource, OperatorGroup)
+	@echo "Cleaning up OLM deployment..."
+	-oc delete subscription ogo -n ogo 2>/dev/null || true
+	-oc get csv -n ogo 2>/dev/null | grep ogo | awk '{print $$1}' | xargs -r oc delete csv -n ogo 2>/dev/null || true
+	-oc delete operatorgroup ogo-operator-group -n ogo 2>/dev/null || true
+	-oc delete catalogsource ogo-catalog -n openshift-marketplace 2>/dev/null || true
+	@echo "OLM cleanup complete"
 
 ##@ OGO Full Pipeline
 
