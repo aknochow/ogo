@@ -19,18 +19,19 @@ package controller
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
 )
 
-// OpenShellPolicyReconciler reconciles OpenShellPolicy objects.
-// v0.1: validates the policy spec and reports status.
-// v0.2: syncs policies to the gateway via gRPC.
 type OpenShellPolicyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -48,22 +49,24 @@ func (r *OpenShellPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Resolve the singleton gateway
 	gwList := &ogov1alpha1.OpenShellGatewayList{}
 	if err := r.List(ctx, gwList); err != nil {
 		return ctrl.Result{}, err
 	}
 	if len(gwList.Items) == 0 {
-		r.setPolicyCondition(policy, "Synced", metav1.ConditionFalse,
-			"NoGateway", "No OpenShellGateway found in the cluster")
+		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+			Type: "Synced", Status: metav1.ConditionFalse,
+			Reason: "NoGateway", Message: "No OpenShellGateway found in the cluster",
+		})
 		policy.Status.Phase = "Pending"
 		return ctrl.Result{}, r.Status().Update(ctx, policy)
 	}
 
-	// Validate policy spec
 	if policy.Spec.PolicyName == "" {
-		r.setPolicyCondition(policy, "Synced", metav1.ConditionFalse,
-			"InvalidSpec", "policyName is required")
+		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+			Type: "Synced", Status: metav1.ConditionFalse,
+			Reason: "InvalidSpec", Message: "policyName is required",
+		})
 		policy.Status.Phase = "Failed"
 		return ctrl.Result{}, r.Status().Update(ctx, policy)
 	}
@@ -76,10 +79,10 @@ func (r *OpenShellPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	log.Info("Policy validated", "policy", policy.Spec.PolicyName,
 		"network_rules", len(policy.Spec.Network), "endpoints", endpointCount)
 
-	// v0.2: sync to gateway via gRPC UpdateConfig/policy APIs
-
-	r.setPolicyCondition(policy, "Synced", metav1.ConditionTrue,
-		"Ready", "Policy validated")
+	meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
+		Type: "Synced", Status: metav1.ConditionTrue,
+		Reason: "Ready", Message: "Policy validated",
+	})
 	policy.Status.Phase = "Synced"
 	policy.Status.ObservedGeneration = policy.Generation
 
@@ -89,25 +92,23 @@ func (r *OpenShellPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 func (r *OpenShellPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&ogov1alpha1.OpenShellPolicy{}).
+		Watches(&ogov1alpha1.OpenShellGateway{},
+			handler.EnqueueRequestsFromMapFunc(r.findPoliciesForGateway),
+		).
 		Named("openshellpolicy").
 		Complete(r)
 }
 
-func (r *OpenShellPolicyReconciler) setPolicyCondition(policy *ogov1alpha1.OpenShellPolicy, condType string, status metav1.ConditionStatus, reason, message string) {
-	condition := metav1.Condition{
-		Type:               condType,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
+func (r *OpenShellPolicyReconciler) findPoliciesForGateway(ctx context.Context, _ client.Object) []reconcile.Request {
+	policies := &ogov1alpha1.OpenShellPolicyList{}
+	if err := r.List(ctx, policies); err != nil {
+		return nil
 	}
-	for i, c := range policy.Status.Conditions {
-		if c.Type == condType {
-			if c.Status != status {
-				policy.Status.Conditions[i] = condition
-			}
-			return
-		}
+	var requests []reconcile.Request
+	for _, p := range policies.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
+		})
 	}
-	policy.Status.Conditions = append(policy.Status.Conditions, condition)
+	return requests
 }

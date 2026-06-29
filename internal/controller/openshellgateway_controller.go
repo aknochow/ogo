@@ -92,18 +92,26 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Singleton enforcement
+	// Singleton enforcement — fail the newer gateways, not the oldest
 	gwList := &ogov1alpha1.OpenShellGatewayList{}
 	if err := r.List(ctx, gwList); err != nil {
 		return ctrl.Result{}, err
 	}
 	if len(gwList.Items) > 1 {
-		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-			Type: ogov1alpha1.ConditionDegraded, Status: metav1.ConditionTrue,
-			Reason: "MultipleGateways", Message: "Only one OpenShellGateway is allowed per cluster",
-		})
-		gw.Status.Phase = ogov1alpha1.PhaseFailed
-		return ctrl.Result{}, r.Status().Update(ctx, gw)
+		oldest := gwList.Items[0]
+		for _, item := range gwList.Items[1:] {
+			if item.CreationTimestamp.Before(&oldest.CreationTimestamp) {
+				oldest = item
+			}
+		}
+		if gw.Name != oldest.Name {
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type: ogov1alpha1.ConditionDegraded, Status: metav1.ConditionTrue,
+				Reason: "MultipleGateways", Message: fmt.Sprintf("Only one OpenShellGateway is allowed per cluster; %q is the active instance", oldest.Name),
+			})
+			gw.Status.Phase = ogov1alpha1.PhaseFailed
+			return ctrl.Result{}, r.Status().Update(ctx, gw)
+		}
 	}
 
 	if !gw.DeletionTimestamp.IsZero() {
@@ -242,9 +250,11 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 		}
 	}
 
+	var cleanupErrors []error
 	for _, obj := range clusterResources {
 		if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			log.Error(err, "Failed to delete cluster resource", "resource", obj.GetName())
+			cleanupErrors = append(cleanupErrors, err)
 		}
 	}
 
@@ -258,8 +268,13 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 		for _, obj := range crossNSResources {
 			if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 				log.Error(err, "Failed to delete cross-namespace resource", "resource", obj.GetName())
+				cleanupErrors = append(cleanupErrors, err)
 			}
 		}
+	}
+
+	if len(cleanupErrors) > 0 {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, fmt.Errorf("cleanup incomplete: %d errors", len(cleanupErrors))
 	}
 
 	controllerutil.RemoveFinalizer(gw, finalizerName)
@@ -1127,6 +1142,11 @@ func (r *OpenShellGatewayReconciler) setDegraded(ctx context.Context, gw *ogov1a
 func (r *OpenShellGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&ogov1alpha1.OpenShellGateway{}).
+		Owns(&appsv1.Deployment{}).
+		Owns(&corev1.Service{}).
+		Owns(&corev1.ConfigMap{}).
+		Owns(&corev1.Secret{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Named("openshellgateway").
 		Complete(r)
 }

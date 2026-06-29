@@ -61,4 +61,4 @@ make manifests       # Regenerate CRDs and RBAC
 make generate        # Regenerate deepcopy
 ```
 
-See `CONTRIBUTING.md` for full build pipeline and deployment guide.
+See the [docs/](docs/) directory for full documentation and deployment guides.

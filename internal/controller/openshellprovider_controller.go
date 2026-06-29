@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -36,9 +37,6 @@ import (
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
 )
 
-// OpenShellProviderReconciler reconciles OpenShellProvider objects.
-// v0.1: resolves credentials from Secrets and reports status.
-// v0.2: syncs providers to the gateway via gRPC.
 type OpenShellProviderReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -56,19 +54,19 @@ func (r *OpenShellProviderReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Resolve the singleton gateway
 	gwList := &ogov1alpha1.OpenShellGatewayList{}
 	if err := r.List(ctx, gwList); err != nil {
 		return ctrl.Result{}, err
 	}
 	if len(gwList.Items) == 0 {
-		r.setProviderCondition(provider, "Synced", metav1.ConditionFalse,
-			"NoGateway", "No OpenShellGateway found in the cluster")
+		meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
+			Type: "Synced", Status: metav1.ConditionFalse,
+			Reason: "NoGateway", Message: "No OpenShellGateway found in the cluster",
+		})
 		provider.Status.Phase = "Pending"
 		return ctrl.Result{}, r.Status().Update(ctx, provider)
 	}
 
-	// Validate credential references
 	for envVar, secretRef := range provider.Spec.Credentials {
 		secret := &corev1.Secret{}
 		err := r.Get(ctx, types.NamespacedName{
@@ -77,16 +75,20 @@ func (r *OpenShellProviderReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}, secret)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				r.setProviderCondition(provider, "Synced", metav1.ConditionFalse,
-					"SecretNotFound", fmt.Sprintf("Secret %q for credential %q not found", secretRef.Name, envVar))
+				meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
+					Type: "Synced", Status: metav1.ConditionFalse,
+					Reason: "SecretNotFound", Message: fmt.Sprintf("Secret %q for credential %q not found", secretRef.Name, envVar),
+				})
 				provider.Status.Phase = "Failed"
 				return ctrl.Result{}, r.Status().Update(ctx, provider)
 			}
 			return ctrl.Result{}, err
 		}
 		if _, ok := secret.Data[secretRef.Key]; !ok {
-			r.setProviderCondition(provider, "Synced", metav1.ConditionFalse,
-				"KeyNotFound", fmt.Sprintf("Key %q not found in Secret %q", secretRef.Key, secretRef.Name))
+			meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
+				Type: "Synced", Status: metav1.ConditionFalse,
+				Reason: "KeyNotFound", Message: fmt.Sprintf("Key %q not found in Secret %q", secretRef.Key, secretRef.Name),
+			})
 			provider.Status.Phase = "Failed"
 			return ctrl.Result{}, r.Status().Update(ctx, provider)
 		}
@@ -95,10 +97,10 @@ func (r *OpenShellProviderReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	log.Info("Provider credentials validated", "provider", provider.Spec.ProviderType,
 		"credentials", len(provider.Spec.Credentials))
 
-	// v0.2: sync to gateway via gRPC CreateProvider/UpdateProvider
-
-	r.setProviderCondition(provider, "Synced", metav1.ConditionTrue,
-		"Ready", "Provider credentials validated")
+	meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
+		Type: "Synced", Status: metav1.ConditionTrue,
+		Reason: "Ready", Message: "Provider credentials validated",
+	})
 	provider.Status.Phase = "Synced"
 	provider.Status.ObservedGeneration = provider.Generation
 
@@ -112,6 +114,9 @@ func (r *OpenShellProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.findProvidersForSecret),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
 		).
+		Watches(&ogov1alpha1.OpenShellGateway{},
+			handler.EnqueueRequestsFromMapFunc(r.findProvidersForGateway),
+		).
 		Named("openshellprovider").
 		Complete(r)
 }
@@ -121,16 +126,12 @@ func (r *OpenShellProviderReconciler) findProvidersForSecret(ctx context.Context
 	if err := r.List(ctx, providers, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
-
 	var requests []reconcile.Request
 	for _, p := range providers.Items {
 		for _, ref := range p.Spec.Credentials {
 			if ref.Name == obj.GetName() {
 				requests = append(requests, reconcile.Request{
-					NamespacedName: types.NamespacedName{
-						Name:      p.Name,
-						Namespace: p.Namespace,
-					},
+					NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
 				})
 				break
 			}
@@ -139,21 +140,16 @@ func (r *OpenShellProviderReconciler) findProvidersForSecret(ctx context.Context
 	return requests
 }
 
-func (r *OpenShellProviderReconciler) setProviderCondition(provider *ogov1alpha1.OpenShellProvider, condType string, status metav1.ConditionStatus, reason, message string) {
-	condition := metav1.Condition{
-		Type:               condType,
-		Status:             status,
-		Reason:             reason,
-		Message:            message,
-		LastTransitionTime: metav1.Now(),
+func (r *OpenShellProviderReconciler) findProvidersForGateway(ctx context.Context, _ client.Object) []reconcile.Request {
+	providers := &ogov1alpha1.OpenShellProviderList{}
+	if err := r.List(ctx, providers); err != nil {
+		return nil
 	}
-	for i, c := range provider.Status.Conditions {
-		if c.Type == condType {
-			if c.Status != status {
-				provider.Status.Conditions[i] = condition
-			}
-			return
-		}
+	var requests []reconcile.Request
+	for _, p := range providers.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},
+		})
 	}
-	provider.Status.Conditions = append(provider.Status.Conditions, condition)
+	return requests
 }
