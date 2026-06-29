@@ -247,6 +247,12 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	grantType := r.FormValue("grant_type")
+	if grantType != "authorization_code" {
+		http.Error(w, `{"error":"unsupported_grant_type"}`, http.StatusBadRequest)
+		return
+	}
+
 	code := r.FormValue("code")
 
 	s.codesMu.Lock()

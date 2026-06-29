@@ -38,7 +38,7 @@ func generateJWTSigner() (*JWTSigner, error) {
 		return nil, fmt.Errorf("generating Ed25519 key: %w", err)
 	}
 	hash := sha256.Sum256(pub)
-	kid := hex.EncodeToString(hash[:8])
+	kid := hex.EncodeToString(hash[:16])
 	return &JWTSigner{privateKey: priv, publicKey: pub, kid: kid}, nil
 }
 
@@ -78,7 +78,7 @@ func loadJWTSigner(signingKeyPath, publicKeyPath, kidPath string) (*JWTSigner, e
 	}
 
 	hash := sha256.Sum256(pub)
-	kid := hex.EncodeToString(hash[:8])
+	kid := hex.EncodeToString(hash[:16])
 	if kidPath != "" {
 		kidBytes, err := os.ReadFile(kidPath)
 		if err == nil {

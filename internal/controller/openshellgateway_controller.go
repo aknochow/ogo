@@ -507,8 +507,12 @@ func (r *OpenShellGatewayReconciler) reconcileJWTKeys(ctx context.Context, gw *o
 	secretName := gw.Name + "-jwt-keys"
 
 	existing := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing); err == nil {
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing)
+	if err == nil {
 		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("checking JWT keys secret: %w", err)
 	}
 
 	keys, err := pki.GenerateJWTKeys()
@@ -531,8 +535,12 @@ func (r *OpenShellGatewayReconciler) reconcileAuthBridgeKeys(ctx context.Context
 	secretName := gw.Name + "-auth-bridge-keys"
 
 	existing := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing); err == nil {
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing)
+	if err == nil {
 		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("checking auth-bridge keys secret: %w", err)
 	}
 
 	keys, err := pki.GenerateJWTKeys()

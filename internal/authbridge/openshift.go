@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 type OpenShiftClient struct {
@@ -32,7 +33,7 @@ func NewOpenShiftClient(oauthServerURL, clientID, clientSecret string) *OpenShif
 		oauthServerURL: strings.TrimRight(oauthServerURL, "/"),
 		clientID:       clientID,
 		clientSecret:   clientSecret,
-		httpClient:     &http.Client{Transport: transport},
+		httpClient:     &http.Client{Transport: transport, Timeout: 30 * time.Second},
 	}
 }
 
@@ -72,7 +73,7 @@ func (c *OpenShiftClient) ExchangeCode(code, redirectURI string) (*TokenResponse
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 		return nil, fmt.Errorf("token exchange failed (%d): %s", resp.StatusCode, string(body))
 	}
 
@@ -109,7 +110,7 @@ func (c *OpenShiftClient) GetUserInfo(accessToken string) (*UserInfo, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
 		return nil, fmt.Errorf("user info failed (%d): %s", resp.StatusCode, string(body))
 	}
 
