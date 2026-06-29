@@ -615,11 +615,11 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 		deploy.Labels = labels
 		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: selectorLabels(gw)}
 
-		var deployOIDCIssuer string
+		var oidcIssuer string
 		if authBridgeEnabled(gw, isOCP) {
-			deployOIDCIssuer = authBridgeInternalURL(gw)
+			oidcIssuer = authBridgeInternalURL(gw)
 		}
-		configHash := computeConfigHash(gateway.RenderGatewayTOML(gw, sandboxNamespace(gw), deployOIDCIssuer))
+		configHash := computeConfigHash(gateway.RenderGatewayTOML(gw, sandboxNamespace(gw), oidcIssuer))
 
 		image := gw.Spec.Image
 		if image == "" {
@@ -827,6 +827,10 @@ func (r *OpenShellGatewayReconciler) reconcileService(ctx context.Context, gw *o
 
 func (r *OpenShellGatewayReconciler) reconcileNetworkPolicy(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
 	if gw.Spec.NetworkPolicy.Enabled != nil && !*gw.Spec.NetworkPolicy.Enabled {
+		existing := &networkingv1.NetworkPolicy{}
+		if err := r.Get(ctx, types.NamespacedName{Name: gw.Name + "-sandbox-ssh", Namespace: sandboxNamespace(gw)}, existing); err == nil {
+			_ = r.Delete(ctx, existing)
+		}
 		return nil
 	}
 
