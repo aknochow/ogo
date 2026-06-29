@@ -42,7 +42,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
 	"github.com/aknochow/ogo/internal/gateway"
@@ -1174,15 +1176,26 @@ func (r *OpenShellGatewayReconciler) setDegraded(ctx context.Context, gw *ogov1a
 // --- Setup ---
 
 func (r *OpenShellGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	labelMatcher := handler.EnqueueRequestsFromMapFunc(r.findGatewayForManagedResource)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&ogov1alpha1.OpenShellGateway{}).
-		Owns(&appsv1.Deployment{}).
-		Owns(&corev1.Service{}).
-		Owns(&corev1.ConfigMap{}).
-		Owns(&corev1.Secret{}).
-		Owns(&networkingv1.NetworkPolicy{}).
+		Watches(&appsv1.Deployment{}, labelMatcher).
+		Watches(&corev1.Service{}, labelMatcher).
+		Watches(&corev1.ConfigMap{}, labelMatcher).
 		Named("openshellgateway").
 		Complete(r)
+}
+
+func (r *OpenShellGatewayReconciler) findGatewayForManagedResource(ctx context.Context, obj client.Object) []reconcile.Request {
+	labels := obj.GetLabels()
+	if labels[labelManagedBy] != "ogo" {
+		return nil
+	}
+	name := labels[labelInstance]
+	if name == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
 }
 
 // --- Helpers ---

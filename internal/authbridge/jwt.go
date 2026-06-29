@@ -77,7 +77,8 @@ func loadJWTSigner(signingKeyPath, publicKeyPath, kidPath string) (*JWTSigner, e
 		return nil, fmt.Errorf("public key is not Ed25519")
 	}
 
-	kid := hex.EncodeToString(sha256.New().Sum(pub)[:8])
+	hash := sha256.Sum256(pub)
+	kid := hex.EncodeToString(hash[:8])
 	if kidPath != "" {
 		kidBytes, err := os.ReadFile(kidPath)
 		if err == nil {
