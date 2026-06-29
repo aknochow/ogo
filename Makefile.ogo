@@ -1,0 +1,115 @@
+# OGO extension targets — included by the main Makefile.
+# Adds calver tagging, podzilla remote builds, and OLMv1 deployment.
+
+# --- Calver Tagging ---
+
+# TAG is the calver build tag: 0.1.0-YYYYMMDDHHMMSS
+# Auto-generated for build targets, reusable via TAG= override.
+TAG ?= $(VERSION)-$(shell date +%Y%m%d%H%M%S)
+
+# Override the default image tags to use calver
+OGO_IMG           = $(IMAGE_TAG_BASE):$(TAG)
+OGO_BUNDLE_IMG    = $(IMAGE_TAG_BASE)-bundle:$(TAG)
+OGO_CATALOG_IMG   = $(IMAGE_TAG_BASE)-catalog:$(TAG)
+OGO_AUTH_IMG      = quay.io/aknochow/ogo-auth-bridge:$(TAG)
+
+# Remote podman connection for amd64 builds from Apple Silicon
+REMOTE_PODMAN ?= podman --connection podzilla
+
+##@ OGO Pipeline
+
+.PHONY: show-tag
+show-tag: ## Show the TAG that will be used for images
+	@echo "TAG=$(TAG)"
+	@echo "OGO_IMG=$(OGO_IMG)"
+	@echo "OGO_BUNDLE_IMG=$(OGO_BUNDLE_IMG)"
+	@echo "OGO_CATALOG_IMG=$(OGO_CATALOG_IMG)"
+	@echo "OGO_AUTH_IMG=$(OGO_AUTH_IMG)"
+
+.PHONY: ogo-build
+ogo-build: ## Build operator + auth-bridge images on podzilla (amd64)
+	@echo "Building operator image $(OGO_IMG)..."
+	$(REMOTE_PODMAN) build -f Containerfile -t $(OGO_IMG) .
+	@echo "Building auth-bridge image $(OGO_AUTH_IMG)..."
+	$(REMOTE_PODMAN) build -f Containerfile.auth-bridge -t $(OGO_AUTH_IMG) .
+
+.PHONY: ogo-push
+ogo-push: ## Push operator + auth-bridge images
+	@echo "Pushing $(OGO_IMG)..."
+	$(REMOTE_PODMAN) push $(OGO_IMG)
+	@echo "Pushing $(OGO_AUTH_IMG)..."
+	$(REMOTE_PODMAN) push $(OGO_AUTH_IMG)
+
+.PHONY: ogo-bundle
+ogo-bundle: manifests kustomize operator-sdk ## Generate bundle with calver tag
+	$(OPERATOR_SDK) generate kustomize manifests -q
+	cd config/manager && $(KUSTOMIZE) edit set image controller=$(OGO_IMG)
+	$(KUSTOMIZE) build config/manifests | $(OPERATOR_SDK) generate bundle $(BUNDLE_GEN_FLAGS)
+	$(OPERATOR_SDK) bundle validate ./bundle
+	@echo "Bundle generated for $(OGO_IMG)"
+
+.PHONY: ogo-bundle-build
+ogo-bundle-build: ## Build bundle image on podzilla
+	$(REMOTE_PODMAN) build -f bundle.Dockerfile -t $(OGO_BUNDLE_IMG) .
+
+.PHONY: ogo-bundle-push
+ogo-bundle-push: ## Push bundle image
+	$(REMOTE_PODMAN) push $(OGO_BUNDLE_IMG)
+
+.PHONY: ogo-catalog-build
+ogo-catalog-build: opm ## Build catalog image with the bundle
+	$(OPM) index add --container-tool $(CONTAINER_TOOL) --mode semver \
+		--tag $(OGO_CATALOG_IMG) --bundles $(OGO_BUNDLE_IMG)
+
+.PHONY: ogo-catalog-push
+ogo-catalog-push: ## Push catalog image
+	$(REMOTE_PODMAN) push $(OGO_CATALOG_IMG)
+
+##@ OGO OLMv1 Deployment
+
+.PHONY: deploy-olm
+deploy-olm: ## Deploy OGO via OLMv1 (ClusterCatalog + ClusterExtension)
+	@echo "Deploying OGO via OLMv1 with catalog $(OGO_CATALOG_IMG)..."
+	@oc apply -f - <<< '{ \
+		"apiVersion": "olm.operatorframework.io/v1", \
+		"kind": "ClusterCatalog", \
+		"metadata": {"name": "ogo"}, \
+		"spec": {"source": {"type": "Image", "image": {"ref": "$(OGO_CATALOG_IMG)", "pollIntervalMinutes": 10}}} \
+	}'
+	@echo "Waiting for catalog to be serving..."
+	@oc wait --for=condition=Serving clustercatalog/ogo --timeout=120s
+	@oc apply -f - <<< '{ \
+		"apiVersion": "olm.operatorframework.io/v1", \
+		"kind": "ClusterExtension", \
+		"metadata": {"name": "ogo"}, \
+		"spec": { \
+			"source": {"sourceType": "Catalog", "catalog": {"packageName": "ogo"}}, \
+			"install": {"namespace": "ogo", "serviceAccount": {"name": "ogo-controller-manager"}} \
+		} \
+	}'
+	@echo "OLMv1 deployment created. Check: oc get clusterextension ogo"
+
+.PHONY: clean-olm
+clean-olm: ## Remove OLMv1 deployment (ClusterExtension + ClusterCatalog)
+	@echo "Cleaning up OLMv1 deployment..."
+	-oc delete clusterextension ogo 2>/dev/null || true
+	-oc delete clustercatalog ogo 2>/dev/null || true
+	@echo "OLMv1 cleanup complete"
+
+##@ OGO Full Pipeline
+
+.PHONY: ogo-all
+ogo-all: ogo-build ogo-push ogo-bundle ogo-bundle-build ogo-bundle-push ogo-catalog-build ogo-catalog-push ## Full pipeline: build → push → bundle → catalog (no deploy)
+	@echo ""
+	@echo "=== Pipeline complete ==="
+	@echo "TAG:     $(TAG)"
+	@echo "Images:"
+	@echo "  Operator:    $(OGO_IMG)"
+	@echo "  Auth-bridge: $(OGO_AUTH_IMG)"
+	@echo "  Bundle:      $(OGO_BUNDLE_IMG)"
+	@echo "  Catalog:     $(OGO_CATALOG_IMG)"
+	@echo ""
+	@echo "Deploy with: make deploy-olm TAG=$(TAG)"
+
+.PHONY: ogo-release
+ogo-release: ogo-all deploy-olm ## Full pipeline + OLMv1 deploy

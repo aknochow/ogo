@@ -65,6 +65,9 @@ CONTAINER_TOOL ?= podman
 SHELL = /usr/bin/env bash -o pipefail
 .SHELLFLAGS = -ec
 
+# Include OGO extension targets (calver, podzilla, OLMv1)
+-include Makefile.ogo
+
 .PHONY: all
 all: build
 
