@@ -66,25 +66,21 @@ spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
-    - description: >-
-        Cluster-scoped singleton that deploys and manages an NVIDIA OpenShell
-        Gateway instance with TLS, authentication, Envoy Gateway ingress,
-        and sandbox lifecycle management.
-      displayName: OpenShell Gateway
+    - description: OpenShellGateway is a cluster-scoped singleton that manages an
+        OpenShell Gateway instance.
+      displayName: Open Shell Gateway
       kind: OpenShellGateway
       name: openshellgateways.gateway.ogo.aknochow.io
       version: v1alpha1
-    - description: >-
-        Defines network, filesystem, and process policies enforced on
-        sandbox pods by the OpenShell supervisor.
-      displayName: OpenShell Policy
+    - description: OpenShellPolicy defines a sandbox policy template for the OpenShell
+        Gateway.
+      displayName: Open Shell Policy
       kind: OpenShellPolicy
       name: openshellpolicies.gateway.ogo.aknochow.io
       version: v1alpha1
-    - description: >-
-        Configures API credential bundles (Anthropic, Vertex AI, GitHub)
-        injected into sandbox pods for AI agent access.
-      displayName: OpenShell Provider
+    - description: OpenShellProvider defines a credential bundle for the OpenShell
+        Gateway.
+      displayName: Open Shell Provider
       kind: OpenShellProvider
       name: openshellproviders.gateway.ogo.aknochow.io
       version: v1alpha1
@@ -101,11 +97,20 @@ spec:
     - Sandbox network/filesystem/process policies
     - RBAC, SCC bindings, and NetworkPolicies
 
+    ### Getting Started
+    1. Install the [Agent Sandbox CRD](https://github.com/kubernetes-sigs/agent-sandbox)
+    2. Create a PostgreSQL database and Secret (key: `uri`)
+    3. Create an `OpenShellGateway` CR (see the form defaults)
+    4. Install the [openshell CLI](https://github.com/NVIDIA/OpenShell): `brew install nvidia/tap/openshell`
+    5. Connect: `openshell gateway login` → `openshell sandbox create`
+
     ### Prerequisites
     - PostgreSQL database (create a Secret with key `uri`)
     - cert-manager operator (for Let's Encrypt TLS)
     - Envoy Gateway (optional, for proper gRPC/HTTP2 ingress)
-    - Agent Sandbox CRD (`agents.x-k8s.io`)
+    - [Agent Sandbox CRD](https://github.com/kubernetes-sigs/agent-sandbox) (`agents.x-k8s.io`)
+
+    For full documentation see the [OGO docs](https://github.com/aknochow/ogo/tree/main/docs).
   displayName: OpenShell Gateway Operator
   icon:
   - base64data: ""
