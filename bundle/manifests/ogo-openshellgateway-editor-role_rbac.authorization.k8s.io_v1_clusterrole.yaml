@@ -8,7 +8,7 @@ metadata:
   name: ogo-openshellgateway-editor-role
 rules:
 - apiGroups:
-  - gateway.ogo.io
+  - gateway.ogo.aknochow.io
   resources:
   - openshellgateways
   verbs:
@@ -20,7 +20,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - gateway.ogo.io
+  - gateway.ogo.aknochow.io
   resources:
   - openshellgateways/status
   verbs:

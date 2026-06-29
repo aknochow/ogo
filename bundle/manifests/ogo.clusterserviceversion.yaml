@@ -5,45 +5,49 @@ metadata:
     alm-examples: |-
       [
         {
-          "apiVersion": "gateway.ogo.io/v1alpha1",
+          "apiVersion": "gateway.ogo.aknochow.io/v1alpha1",
           "kind": "OpenShellGateway",
           "metadata": {
-            "labels": {
-              "app.kubernetes.io/managed-by": "kustomize",
-              "app.kubernetes.io/name": "ogo"
-            },
             "name": "openshell"
           },
           "spec": {
-            "database": {
-              "secretName": "openshell-pg-uri"
+            "auth": {
+              "openshift": {
+                "adminGroup": "openshell-admins",
+                "tokenTTL": "8h"
+              }
             },
-            "image": "ghcr.io/nvidia/openshell/gateway",
+            "database": {
+              "secretName": "ogo-pg"
+            },
             "logLevel": "info",
             "namespace": "ogo",
             "networkPolicy": {
               "enabled": true
             },
             "replicas": 1,
+            "route": {
+              "hostname": "openshell.apps.example.com"
+            },
             "sandbox": {
               "appArmorProfile": "Unconfined",
               "defaultImage": "ghcr.io/nvidia/openshell-community/sandboxes/base:latest",
               "workspaceStorageSize": "2Gi"
             },
             "tls": {
-              "enabled": true
+              "certManager": {
+                "issuerKind": "ClusterIssuer",
+                "issuerName": "letsencrypt"
+              },
+              "enabled": false
             }
           }
         },
         {
-          "apiVersion": "gateway.ogo.io/v1alpha1",
+          "apiVersion": "gateway.ogo.aknochow.io/v1alpha1",
           "kind": "OpenShellPolicy",
           "metadata": {
-            "labels": {
-              "app.kubernetes.io/managed-by": "kustomize",
-              "app.kubernetes.io/name": "ogo"
-            },
-            "name": "default-policy",
+            "name": "claude-code",
             "namespace": "ogo"
           },
           "spec": {
@@ -51,32 +55,55 @@ metadata:
               "includeWorkdir": true,
               "readOnly": [
                 "/usr",
-                "/etc"
+                "/lib",
+                "/etc",
+                "/app",
+                "/proc/self",
+                "/dev/urandom"
               ],
               "readWrite": [
                 "/sandbox",
-                "/tmp"
+                "/tmp",
+                "/dev/null"
               ]
             },
             "network": {
-              "anthropic-api": {
+              "anthropic": {
                 "binaries": [
                   {
-                    "path": "/usr/bin/curl"
+                    "path": "/usr/bin/claude"
+                  },
+                  {
+                    "path": "/usr/local/bin/claude"
                   }
                 ],
                 "endpoints": [
                   {
                     "access": "read-write",
+                    "enforcement": "enforce",
                     "host": "api.anthropic.com",
+                    "port": 443,
+                    "protocol": "rest"
+                  },
+                  {
+                    "access": "read-write",
+                    "enforcement": "enforce",
+                    "host": "statsig.anthropic.com",
+                    "port": 443,
+                    "protocol": "rest"
+                  },
+                  {
+                    "access": "read-write",
+                    "enforcement": "enforce",
+                    "host": "sentry.io",
                     "port": 443,
                     "protocol": "rest"
                   }
                 ],
-                "name": "anthropic"
+                "name": "Anthropic API"
               }
             },
-            "policyName": "default",
+            "policyName": "claude-code",
             "process": {
               "runAsGroup": "sandbox",
               "runAsUser": "sandbox"
@@ -84,13 +111,9 @@ metadata:
           }
         },
         {
-          "apiVersion": "gateway.ogo.io/v1alpha1",
+          "apiVersion": "gateway.ogo.aknochow.io/v1alpha1",
           "kind": "OpenShellProvider",
           "metadata": {
-            "labels": {
-              "app.kubernetes.io/managed-by": "kustomize",
-              "app.kubernetes.io/name": "ogo"
-            },
             "name": "claude-code",
             "namespace": "ogo"
           },
@@ -105,11 +128,11 @@ metadata:
           }
         }
       ]
-    capabilities: Basic Install
-    createdAt: "2026-06-25T18:15:53Z"
+    capabilities: Full Lifecycle
+    createdAt: "2026-06-29T15:33:30Z"
     operators.operatorframework.io/builder: operator-sdk-v1.42.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
-  name: ogo.v0.1.0-20260625141551
+  name: ogo.v0.1.0
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
@@ -119,25 +142,51 @@ spec:
         OpenShell Gateway instance.
       displayName: Open Shell Gateway
       kind: OpenShellGateway
-      name: openshellgateways.gateway.ogo.io
+      name: openshellgateways.gateway.ogo.aknochow.io
       version: v1alpha1
     - description: OpenShellPolicy defines a sandbox policy template for the OpenShell
         Gateway.
       displayName: Open Shell Policy
       kind: OpenShellPolicy
-      name: openshellpolicies.gateway.ogo.io
+      name: openshellpolicies.gateway.ogo.aknochow.io
       version: v1alpha1
     - description: OpenShellProvider defines a credential bundle for the OpenShell
         Gateway.
       displayName: Open Shell Provider
       kind: OpenShellProvider
-      name: openshellproviders.gateway.ogo.io
+      name: openshellproviders.gateway.ogo.aknochow.io
       version: v1alpha1
-  description: Ogo description. TODO.
-  displayName: Ogo
+  description: |-
+    **OGO** deploys and manages [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell)
+    Gateway instances on OpenShift. OpenShell provides safe, policy-enforced sandboxed
+    environments for autonomous AI agents.
+
+    OGO automates:
+    - TLS certificate management (cert-manager + Let's Encrypt)
+    - OpenShift SSO authentication (auth-bridge sidecar)
+    - Envoy Gateway ingress (Gateway API + GRPCRoute)
+    - Provider credential injection (Anthropic, Vertex AI, GitHub)
+    - Sandbox network/filesystem/process policies
+    - RBAC, SCC bindings, and NetworkPolicies
+
+    ### Getting Started
+    1. Install the [Agent Sandbox CRD](https://github.com/kubernetes-sigs/agent-sandbox)
+    2. Create a PostgreSQL database and Secret (key: `uri`)
+    3. Create an `OpenShellGateway` CR (see the form defaults)
+    4. Install the [openshell CLI](https://github.com/NVIDIA/OpenShell): `brew install nvidia/tap/openshell`
+    5. Connect: `openshell gateway login` → `openshell sandbox create`
+
+    ### Prerequisites
+    - PostgreSQL database (create a Secret with key `uri`)
+    - cert-manager operator (for Let's Encrypt TLS)
+    - Envoy Gateway (optional, for proper gRPC/HTTP2 ingress)
+    - [Agent Sandbox CRD](https://github.com/kubernetes-sigs/agent-sandbox) (`agents.x-k8s.io`)
+
+    For full documentation see the [OGO docs](https://github.com/aknochow/ogo/tree/main/docs).
+  displayName: OpenShell Gateway Operator
   icon:
   - base64data: ""
-    mediatype: ""
+    mediatype: image/svg+xml
   install:
     spec:
       clusterPermissions:
@@ -217,7 +266,20 @@ spec:
           - update
           - watch
         - apiGroups:
-          - gateway.ogo.io
+          - gateway.networking.k8s.io
+          resources:
+          - gateways
+          - grpcroutes
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - gateway.ogo.aknochow.io
           resources:
           - openshellgateways
           - openshellpolicies
@@ -231,7 +293,7 @@ spec:
           - update
           - watch
         - apiGroups:
-          - gateway.ogo.io
+          - gateway.ogo.aknochow.io
           resources:
           - openshellgateways/finalizers
           - openshellpolicies/finalizers
@@ -239,7 +301,7 @@ spec:
           verbs:
           - update
         - apiGroups:
-          - gateway.ogo.io
+          - gateway.ogo.aknochow.io
           resources:
           - openshellgateways/status
           - openshellpolicies/status
@@ -252,6 +314,18 @@ spec:
           - networking.k8s.io
           resources:
           - networkpolicies
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - oauth.openshift.io
+          resources:
+          - oauthclients
           verbs:
           - create
           - delete
@@ -341,7 +415,7 @@ spec:
                 - --health-probe-bind-address=:8081
                 command:
                 - /manager
-                image: quay.io/aknochow/ogo:0.1.0-20260626112750
+                image: quay.io/aknochow/ogo:0.1.0-20260629113328
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -415,15 +489,25 @@ spec:
   - supported: true
     type: AllNamespaces
   keywords:
-  - ogo
+  - openshift
+  - openshell
+  - gateway
+  - sandbox
+  - ai
+  - agent
+  - nvidia
   links:
-  - name: Ogo
-    url: https://ogo.domain
+  - name: GitHub
+    url: https://github.com/aknochow/ogo
+  - name: Documentation
+    url: https://github.com/aknochow/ogo/tree/main/docs
+  - name: NVIDIA OpenShell
+    url: https://github.com/NVIDIA/OpenShell
   maintainers:
-  - email: your@email.com
-    name: Maintainer Name
+  - email: aknochow@redhat.com
+    name: Adam Knochowski
   maturity: alpha
   provider:
     name: aknochow
     url: https://github.com/aknochow/ogo
-  version: 0.1.0-20260625141551
+  version: 0.1.0

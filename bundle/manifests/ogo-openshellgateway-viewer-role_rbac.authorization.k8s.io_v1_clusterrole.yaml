@@ -8,7 +8,7 @@ metadata:
   name: ogo-openshellgateway-viewer-role
 rules:
 - apiGroups:
-  - gateway.ogo.io
+  - gateway.ogo.aknochow.io
   resources:
   - openshellgateways
   verbs:
@@ -16,7 +16,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - gateway.ogo.io
+  - gateway.ogo.aknochow.io
   resources:
   - openshellgateways/status
   verbs:

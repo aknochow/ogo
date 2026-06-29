@@ -8,13 +8,13 @@ metadata:
   name: ogo-openshellgateway-admin-role
 rules:
 - apiGroups:
-  - gateway.ogo.io
+  - gateway.ogo.aknochow.io
   resources:
   - openshellgateways
   verbs:
   - '*'
 - apiGroups:
-  - gateway.ogo.io
+  - gateway.ogo.aknochow.io
   resources:
   - openshellgateways/status
   verbs:
