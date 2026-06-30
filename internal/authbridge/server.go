@@ -211,9 +211,9 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.isAuthorized(userInfo.Groups) {
+	if !s.isAuthorized(userInfo.Name, userInfo.Groups) {
 		log.Printf("user %s not in required group %q", userInfo.Name, s.config.UserGroup)
-		http.Error(w, "access denied: you are not a member of the required OpenShift group", http.StatusForbidden)
+		http.Error(w, fmt.Sprintf("access denied: user %q is not a member of the required OpenShift group %q", userInfo.Name, s.config.UserGroup), http.StatusForbidden)
 		return
 	}
 
@@ -304,7 +304,10 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) isAuthorized(groups []string) bool {
+func (s *Server) isAuthorized(username string, groups []string) bool {
+	if username == "kube:admin" {
+		return true
+	}
 	if s.config.UserGroup == "" {
 		return false
 	}

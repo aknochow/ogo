@@ -234,19 +234,21 @@ func TestIsAuthorized(t *testing.T) {
 
 	tests := []struct {
 		name       string
+		username   string
 		groups     []string
 		authorized bool
 	}{
-		{"member", []string{"other", "openshell-users"}, true},
-		{"not member", []string{"other", "admins"}, false},
-		{"empty groups", []string{}, false},
-		{"admin but not user", []string{"openshell-admins"}, false},
+		{"member", "alice", []string{"other", "openshell-users"}, true},
+		{"not member", "bob", []string{"other", "admins"}, false},
+		{"empty groups", "bob", []string{}, false},
+		{"admin but not user group", "bob", []string{"openshell-admins"}, false},
+		{"kube:admin bypasses", "kube:admin", []string{}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := s.isAuthorized(tt.groups)
+			got := s.isAuthorized(tt.username, tt.groups)
 			if got != tt.authorized {
-				t.Errorf("isAuthorized(%v) = %v, want %v", tt.groups, got, tt.authorized)
+				t.Errorf("isAuthorized(%q, %v) = %v, want %v", tt.username, tt.groups, got, tt.authorized)
 			}
 		})
 	}
@@ -255,7 +257,7 @@ func TestIsAuthorized(t *testing.T) {
 func TestIsAuthorizedEmptyConfig(t *testing.T) {
 	s := testServer(t)
 	s.config.UserGroup = ""
-	if s.isAuthorized([]string{"any-group"}) {
+	if s.isAuthorized("alice", []string{"any-group"}) {
 		t.Error("empty userGroup should reject all users")
 	}
 }
