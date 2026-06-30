@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+const algRS256 = "RS256"
+
 func TestNewJWTSigner(t *testing.T) {
 	signer, err := NewJWTSigner()
 	if err != nil {
@@ -52,8 +54,8 @@ func TestMintToken(t *testing.T) {
 	headerJSON, _ := base64.RawURLEncoding.DecodeString(parts[0])
 	var header map[string]string
 	_ = json.Unmarshal(headerJSON, &header)
-	if header["alg"] != "RS256" { //nolint:goconst {
-		t.Errorf("alg = %q, want RS256", header["alg"])
+	if header["alg"] != algRS256 {
+		t.Errorf("alg = %q, want %s", header["alg"], algRS256)
 	}
 	if header["kid"] != signer.kid {
 		t.Errorf("kid = %q, want %q", header["kid"], signer.kid)
@@ -105,8 +107,8 @@ func TestJWKS(t *testing.T) {
 	if key.Kty != "RSA" {
 		t.Errorf("kty = %q, want RSA", key.Kty)
 	}
-	if key.Alg != "RS256" {
-		t.Errorf("alg = %q, want RS256", key.Alg)
+	if key.Alg != algRS256 {
+		t.Errorf("alg = %q, want %s", key.Alg, algRS256)
 	}
 	if key.Kid != signer.kid {
 		t.Errorf("kid = %q, want %q", key.Kid, signer.kid)

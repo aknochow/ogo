@@ -28,3 +28,6 @@ go.work
 
 # opm-generated index Dockerfiles
 index.Dockerfile*
+
+# Dev containers
+.devcontainer/

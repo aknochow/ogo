@@ -92,7 +92,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		r := reconciler()
 		result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(result.Requeue).To(BeTrue())
+		Expect(result.RequeueAfter).ToNot(BeZero())
 
 		gw := &ogov1alpha1.OpenShellGateway{}
 		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
