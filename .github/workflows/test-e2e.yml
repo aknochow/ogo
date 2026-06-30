@@ -51,9 +51,13 @@ jobs:
         run: docker build -f Containerfile -t ${{ env.IMG }} .
 
       - name: Install MINC
+        env:
+          MINC_VERSION: v0.1.0
+          MINC_SHA256: 1acdf74755b1da09d8c773a4c0f7f651a1bbca9e6263c533ab11fe029371bb77
         run: |
           curl -LsSf -o /tmp/minc \
-            https://github.com/minc-org/minc/releases/latest/download/minc_linux_amd64
+            "https://github.com/minc-org/minc/releases/download/${MINC_VERSION}/minc_linux_amd64"
+          echo "${MINC_SHA256}  /tmp/minc" | sha256sum -c -
           chmod +x /tmp/minc
           sudo mv /tmp/minc /usr/local/bin/minc
           minc version
