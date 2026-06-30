@@ -21,6 +21,10 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  REGISTRY: quay.io
+  IMG: quay.io/aknochow/ogo:ci-${{ github.sha }}
+
 jobs:
   test-e2e:
     name: E2E on MINC
@@ -28,7 +32,6 @@ jobs:
     timeout-minutes: 30
     env:
       KUBECONFIG: /home/runner/.kube/config
-      IMG: quay.io/aknochow/ogo:e2e-test
 
     steps:
       - name: Checkout
@@ -39,6 +42,18 @@ jobs:
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
           sudo docker image prune -af
           df -h
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build and push operator image
+        run: |
+          echo "${{ secrets.QUAY_PASSWORD }}" | \
+            docker login quay.io -u "${{ secrets.QUAY_USERNAME }}" --password-stdin
+          docker build -f Containerfile -t ${{ env.IMG }} .
+          docker push ${{ env.IMG }}
 
       - name: Install MINC
         run: |
@@ -70,18 +85,9 @@ jobs:
           kubectl get pods -A
           echo "Cluster is ready"
 
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-
-      - name: Build operator image
-        run: |
-          sudo podman build -f Containerfile -t ${{ env.IMG }} .
-
       - name: Deploy operator
         run: |
-          make deploy IMG=${{ env.IMG }} CONTAINER_TOOL=podman
+          make deploy IMG=${{ env.IMG }}
 
       - name: Wait for operator
         run: |
@@ -91,7 +97,7 @@ jobs:
 
       - name: Run e2e tests
         run: |
-          CERT_MANAGER_INSTALL_SKIP=true \
+          SKIP_BUILD=true CERT_MANAGER_INSTALL_SKIP=true IMG=${{ env.IMG }} \
             go test ./test/e2e/ -v -ginkgo.v -timeout 10m
 
       - name: Collect logs on failure
