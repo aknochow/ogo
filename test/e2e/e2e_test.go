@@ -55,7 +55,7 @@ var _ = Describe("Manager", Ordered, func() {
 		nsYaml, err := utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred())
 		cmd = exec.Command("kubectl", "apply", "-f", "-")
-		cmd.Stdin = strings.NewReader(string(nsYaml))
+		cmd.Stdin = strings.NewReader(nsYaml)
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to create namespace")
 
