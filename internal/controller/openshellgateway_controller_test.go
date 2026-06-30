@@ -59,6 +59,9 @@ var _ = Describe("OpenShellGateway Controller", func() {
 				Spec: ogov1alpha1.OpenShellGatewaySpec{
 					Namespace: "ogo-test",
 					Database:  ogov1alpha1.DatabaseSpec{SecretName: "test-pg-uri"},
+					Auth: ogov1alpha1.AuthSpec{
+						OpenShift: ogov1alpha1.OpenShiftAuth{UserGroup: "test-users"},
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())

@@ -20,6 +20,7 @@ func testServer(t *testing.T) *Server {
 		OpenShiftOAuth: "https://oauth-openshift.apps.example.com",
 		ClientID:       "openshell",
 		ClientSecret:   "test-secret",
+		UserGroup:      "openshell-users",
 		TokenTTL:       8 * time.Hour,
 	})
 	if err != nil {
@@ -224,6 +225,38 @@ func TestSecurityHeaders(t *testing.T) {
 		if w.Header().Get("Cache-Control") != "no-store" {
 			t.Errorf("%s: missing Cache-Control", ep)
 		}
+	}
+}
+
+func TestIsAuthorized(t *testing.T) {
+	s := testServer(t)
+	s.config.UserGroup = "openshell-users"
+
+	tests := []struct {
+		name       string
+		groups     []string
+		authorized bool
+	}{
+		{"member", []string{"other", "openshell-users"}, true},
+		{"not member", []string{"other", "admins"}, false},
+		{"empty groups", []string{}, false},
+		{"admin but not user", []string{"openshell-admins"}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.isAuthorized(tt.groups)
+			if got != tt.authorized {
+				t.Errorf("isAuthorized(%v) = %v, want %v", tt.groups, got, tt.authorized)
+			}
+		})
+	}
+}
+
+func TestIsAuthorizedEmptyConfig(t *testing.T) {
+	s := testServer(t)
+	s.config.UserGroup = ""
+	if s.isAuthorized([]string{"any-group"}) {
+		t.Error("empty userGroup should reject all users")
 	}
 }
 

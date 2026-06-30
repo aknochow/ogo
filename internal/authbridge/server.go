@@ -21,6 +21,7 @@ type Config struct {
 	OpenShiftOAuth string
 	ClientID       string
 	ClientSecret   string
+	UserGroup      string // Required group for SSO access (empty = reject all SSO users)
 	AdminGroup     string
 	TokenTTL       time.Duration
 }
@@ -210,6 +211,12 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !s.isAuthorized(userInfo.Groups) {
+		log.Printf("user %s not in required group %q", userInfo.Name, s.config.UserGroup)
+		http.Error(w, "access denied: you are not a member of the required OpenShift group", http.StatusForbidden)
+		return
+	}
+
 	roles := s.mapRoles(userInfo.Groups)
 
 	jwt, err := s.signer.MintToken(
@@ -295,6 +302,18 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		"token_type":   "Bearer",
 		"expires_in":   int(s.config.TokenTTL.Seconds()),
 	})
+}
+
+func (s *Server) isAuthorized(groups []string) bool {
+	if s.config.UserGroup == "" {
+		return false
+	}
+	for _, g := range groups {
+		if g == s.config.UserGroup {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) mapRoles(groups []string) []string {

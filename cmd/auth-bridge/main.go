@@ -24,6 +24,7 @@ func main() {
 		OpenShiftOAuth: envOrDefault("AUTH_BRIDGE_OPENSHIFT_ISSUER", "https://oauth-openshift.apps.example.com"),
 		ClientID:       envOrDefault("AUTH_BRIDGE_CLIENT_ID", "openshell"),
 		ClientSecret:   os.Getenv("AUTH_BRIDGE_CLIENT_SECRET"),
+		UserGroup:      os.Getenv("AUTH_BRIDGE_USER_GROUP"),
 		AdminGroup:     os.Getenv("AUTH_BRIDGE_ADMIN_GROUP"),
 		TokenTTL:       parseDuration(os.Getenv("AUTH_BRIDGE_TOKEN_TTL"), 8*time.Hour),
 	}

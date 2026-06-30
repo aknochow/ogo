@@ -720,6 +720,7 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 							Key:                  "secret",
 						},
 					}},
+					{Name: "AUTH_BRIDGE_USER_GROUP", Value: gw.Spec.Auth.OpenShift.UserGroup},
 					{Name: "AUTH_BRIDGE_ADMIN_GROUP", Value: gw.Spec.Auth.OpenShift.AdminGroup},
 					{Name: "AUTH_BRIDGE_TOKEN_TTL", Value: tokenTTL(gw)},
 					{Name: "AUTH_BRIDGE_SIGNING_KEY", Value: "/etc/auth-bridge-keys/signing.pem"},

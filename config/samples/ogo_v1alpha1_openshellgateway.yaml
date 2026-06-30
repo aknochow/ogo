@@ -35,6 +35,7 @@ spec:
     hostname: openshell.apps.example.com
   auth:
     openshift:
+      userGroup: openshell-users
       adminGroup: openshell-admins
       tokenTTL: "8h"
   logLevel: info

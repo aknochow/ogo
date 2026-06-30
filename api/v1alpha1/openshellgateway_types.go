@@ -192,6 +192,12 @@ type OpenShiftAuth struct {
 	// +optional
 	Enabled *bool `json:"enabled,omitempty"`
 
+	// UserGroup is the OpenShift group required for gateway access via SSO.
+	// Only members of this group can authenticate. Users not in this group
+	// are rejected with 403 at login. Does not affect mTLS access.
+	// +kubebuilder:validation:MinLength=1
+	UserGroup string `json:"userGroup"`
+
 	// AdminGroup is the OpenShift group that maps to the openshell-admin role.
 	// Users in this group get admin access to the gateway.
 	AdminGroup string `json:"adminGroup,omitempty"`
