@@ -86,8 +86,8 @@ jobs:
       - name: Wait for operator
         run: |
           kubectl wait --for=condition=Available deployment/ogo-controller-manager \
-            -n ogo-system --timeout=120s
-          kubectl get pods -n ogo-system
+            -n ogo --timeout=120s
+          kubectl get pods -n ogo
 
       - name: Run e2e tests
         run: |
@@ -98,12 +98,12 @@ jobs:
         if: failure()
         run: |
           echo "=== Operator Logs ==="
-          kubectl logs -n ogo-system -l control-plane=controller-manager \
+          kubectl logs -n ogo -l control-plane=controller-manager \
             -c manager --tail=100 2>/dev/null || true
 
           echo ""
           echo "=== Events ==="
-          kubectl get events -n ogo-system --sort-by='.lastTimestamp' 2>/dev/null \
+          kubectl get events -n ogo --sort-by='.lastTimestamp' 2>/dev/null \
             | tail -30 || true
 
           echo ""
