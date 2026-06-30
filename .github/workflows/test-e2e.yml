@@ -8,6 +8,13 @@ on:
       - 'docs/**'
       - 'CHANGELOG.md'
       - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
   workflow_dispatch:
 
 concurrency:
