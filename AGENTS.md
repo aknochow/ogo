@@ -18,22 +18,31 @@ Envoy Gateway ingress, and provides an auth-bridge for OpenShift SSO login.
 
 ## Versioning - CRITICAL
 
-**Semver-calver hybrid.** Version is `0.1.0` with calver timestamp suffix.
+**Semantic versioning.** Base version is `0.1.0` in the Makefile.
 
 - **NEVER bump the semver** unless the user explicitly says to
-- Calver timestamp IS the natural bump: `TAG="0.1.0-$(date +%Y%m%d%H%M%S)"`
-- Generate per-build, consistent across operator + auth-bridge + bundle + catalog
+- Git tags drive releases: `git tag v0.1.0 && git push origin v0.1.0`
+- VERSION in Makefile stays as base — CI overrides from the git tag
+- No calver dev tags — `:main` is the rolling dev build
+
+### Tag Strategy
+
+| Event | Image tags |
+|-------|------------|
+| Push to main | `:main` |
+| Release (`v0.1.0`) | `:v0.1.0` + `:latest` |
+| Pre-release (`v0.2.0-rc1`) | `:v0.2.0-rc1` |
 
 ### Image Ownership - DO NOT CONFUSE
 
 | Image | Owner | Tags |
 |-------|-------|------|
-| `quay.io/aknochow/ogo` | Us | Our calver |
-| `quay.io/aknochow/ogo-auth-bridge` | Us | Our calver or `latest` |
-| `ghcr.io/nvidia/openshell/gateway` | NVIDIA | Their tags (`latest`, `v0.0.68`) |
+| `quay.io/aknochow/ogo` | Us | Our semver |
+| `quay.io/aknochow/ogo-auth-bridge` | Us | Our semver |
+| `ghcr.io/nvidia/openshell/gateway` | NVIDIA | Their tags (`latest`, `v0.0.73`) |
 | `ghcr.io/nvidia/openshell/supervisor` | NVIDIA | Their tags |
 
-**NEVER tag NVIDIA images with our calver.**
+**NEVER tag NVIDIA images with our tags.**
 
 ## Architecture
 

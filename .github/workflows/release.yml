@@ -125,25 +125,36 @@ jobs:
       - name: Determine tags
         id: tags
         run: |
-          VERSION="${GITHUB_REF_NAME}"
-          TAGS="-t ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${VERSION}"
+          TAGS="-t ${IMAGE_BASE}/${IMAGE}:${TAG}"
 
-          # Add :latest only for non-prerelease tags
-          if [[ "${VERSION}" != *-* ]]; then
-            TAGS="${TAGS} -t ${{ env.IMAGE_BASE }}/${{ matrix.image }}:latest"
+          # Add :latest only for non-prerelease tags (v0.1.0 yes, v0.2.0-rc1 no)
+          if [[ "${TAG}" != *-* ]]; then
+            TAGS="${TAGS} -t ${IMAGE_BASE}/${IMAGE}:latest"
           fi
 
           echo "tags=${TAGS}" >> "$GITHUB_OUTPUT"
+        env:
+          IMAGE_BASE: ${{ env.IMAGE_BASE }}
+          IMAGE: ${{ matrix.image }}
+          TAG: ${{ github.ref_name }}
 
       - name: Create and push manifest
         working-directory: /tmp/digests
         run: |
           docker buildx imagetools create \
-            ${{ steps.tags.outputs.tags }} \
-            $(printf '${{ env.IMAGE_BASE }}/${{ matrix.image }}@sha256:%s ' *)
+            ${MANIFEST_TAGS} \
+            $(printf "${IMAGE_BASE}/${IMAGE}@sha256:%s " *)
+        env:
+          MANIFEST_TAGS: ${{ steps.tags.outputs.tags }}
+          IMAGE_BASE: ${{ env.IMAGE_BASE }}
+          IMAGE: ${{ matrix.image }}
 
       - name: Inspect manifest
-        run: docker buildx imagetools inspect ${{ env.IMAGE_BASE }}/${{ matrix.image }}:${{ github.ref_name }}
+        run: docker buildx imagetools inspect "${IMAGE_BASE}/${IMAGE}:${TAG}"
+        env:
+          IMAGE_BASE: ${{ env.IMAGE_BASE }}
+          IMAGE: ${{ matrix.image }}
+          TAG: ${{ github.ref_name }}
 
   bundle:
     needs: manifest
@@ -176,7 +187,11 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Generate bundle
-        run: make bundle IMG=${{ env.IMAGE_BASE }}/ogo:${{ github.ref_name }} VERSION=${{ steps.version.outputs.version }}
+        run: make bundle IMG="${IMAGE_BASE}/ogo:${TAG}" VERSION="${VERSION}"
+        env:
+          IMAGE_BASE: ${{ env.IMAGE_BASE }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
 
       - name: Build and push bundle image
         uses: docker/build-push-action@v6
@@ -200,7 +215,10 @@ jobs:
 
   release:
     needs: [manifest, bundle]
-    if: always() && needs.manifest.result == 'success'
+    if: >-
+      always() &&
+      needs.manifest.result == 'success' &&
+      (needs.bundle.result == 'success' || needs.bundle.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -239,6 +257,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout main
+          git pull --rebase origin main
           git add CHANGELOG.md
-          git diff --cached --quiet || git commit -m "docs: update CHANGELOG.md for ${{ github.ref_name }}"
+          git diff --cached --quiet || git commit -m "docs: update CHANGELOG.md for ${TAG}"
           git push origin main
+        env:
+          TAG: ${{ github.ref_name }}
