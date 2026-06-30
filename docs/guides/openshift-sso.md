@@ -76,6 +76,25 @@ Check your current groups:
 oc get users <your-username> -o jsonpath='{.groups}'
 ```
 
+### Emergency token revocation
+
+To immediately invalidate all active tokens (e.g., a user who should not
+have access obtained a valid token):
+
+```bash
+oc delete secret openshell-auth-bridge-keys -n ogo
+oc delete pod -n ogo -l app.kubernetes.io/name=openshell
+```
+
+The operator generates new signing keys and the gateway restarts with
+fresh JWKS. All existing tokens become invalid within ~30 seconds.
+Every user must re-login, and users removed from the `userGroup` will
+be blocked.
+
+For less disruptive revocation, reduce `spec.auth.openshift.tokenTTL`
+to a shorter duration (e.g., `"30m"`). Revoked users lose access when
+their token expires naturally.
+
 ### "authentication failed" after gateway restart
 
 The OAuthClient secret may be out of sync. The admin should delete both
