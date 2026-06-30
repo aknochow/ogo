@@ -298,25 +298,13 @@ func (r *OpenShellGatewayReconciler) validateDatabaseSecret(ctx context.Context,
 	secret := &corev1.Secret{}
 	if err := r.Get(ctx, types.NamespacedName{Name: gw.Spec.Database.SecretName, Namespace: ns}, secret); err != nil {
 		if apierrors.IsNotFound(err) {
-			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-				Type: ogov1alpha1.ConditionDatabaseReady, Status: metav1.ConditionFalse,
-				Reason: "SecretNotFound", Message: fmt.Sprintf("Database secret %q not found in namespace %q", gw.Spec.Database.SecretName, ns),
-			})
 			return fmt.Errorf("database secret %q not found in namespace %q", gw.Spec.Database.SecretName, ns)
 		}
 		return fmt.Errorf("checking database secret: %w", err)
 	}
 	if _, ok := secret.Data["uri"]; !ok {
-		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-			Type: ogov1alpha1.ConditionDatabaseReady, Status: metav1.ConditionFalse,
-			Reason: "MissingKey", Message: fmt.Sprintf("Database secret %q missing required key \"uri\"", gw.Spec.Database.SecretName),
-		})
 		return fmt.Errorf("database secret %q missing required key \"uri\"", gw.Spec.Database.SecretName)
 	}
-	meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
-		Type: ogov1alpha1.ConditionDatabaseReady, Status: metav1.ConditionTrue,
-		Reason: "Ready", Message: "Database secret validated",
-	})
 	return nil
 }
 
@@ -829,7 +817,9 @@ func (r *OpenShellGatewayReconciler) reconcileNetworkPolicy(ctx context.Context,
 	if gw.Spec.NetworkPolicy.Enabled != nil && !*gw.Spec.NetworkPolicy.Enabled {
 		existing := &networkingv1.NetworkPolicy{}
 		if err := r.Get(ctx, types.NamespacedName{Name: gw.Name + "-sandbox-ssh", Namespace: sandboxNamespace(gw)}, existing); err == nil {
-			_ = r.Delete(ctx, existing)
+			if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("cleaning up disabled NetworkPolicy: %w", err)
+			}
 		}
 		return nil
 	}
@@ -983,14 +973,24 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw
 	} else if err != nil {
 		return fmt.Errorf("getting Gateway: %w", err)
 	} else {
-		existingHostname, _, _ := unstructured.NestedString(existing.Object, "spec", "listeners", "0", "hostname")
+		var existingHostname string
+		listeners, _, _ := unstructured.NestedSlice(existing.Object, "spec", "listeners")
+		if len(listeners) > 0 {
+			if l, ok := listeners[0].(map[string]interface{}); ok {
+				if h, ok := l["hostname"].(string); ok {
+					existingHostname = h
+				}
+			}
+		}
 		existingClass, _, _ := unstructured.NestedString(existing.Object, "spec", "gatewayClassName")
 		if existingHostname != hostname || existingClass != gatewayClassName(gw) {
-			logf.FromContext(ctx).Info("Gateway spec drifted, recreating", "hostname", hostname)
+			logf.FromContext(ctx).Info("Gateway spec drifted, recreating",
+				"oldHostname", existingHostname, "newHostname", hostname,
+				"oldClass", existingClass, "newClass", gatewayClassName(gw))
 			if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("deleting drifted Gateway: %w", err)
 			}
-			return fmt.Errorf("Gateway recreating after drift — will converge on next reconcile")
+			return nil
 		}
 	}
 
