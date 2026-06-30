@@ -1,0 +1,49 @@
+[project]
+site_name = "OGO"
+site_url = "https://aknochow.github.io/ogo/"
+docs_dir = "docs"
+site_dir = "public"
+
+[project.theme]
+name = "patternfly-6-dark"
+
+# Navigation
+[[project.nav]]
+"Overview" = [
+  { "Introduction" = "index.md" },
+]
+
+[[project.nav]]
+"Concepts" = [
+  { "Overview" = "concepts/index.md" },
+  { "Why OpenShift" = "concepts/why-openshift.md" },
+  { "Gateway" = "concepts/gateway.md" },
+  { "Sandbox" = "concepts/sandbox.md" },
+  { "Authentication" = "concepts/authentication.md" },
+  { "Provider" = "concepts/provider.md" },
+  { "Policy" = "concepts/policy.md" },
+]
+
+[[project.nav]]
+"Guides" = [
+  { "Overview" = "guides/index.md" },
+  { "Quickstart" = "guides/quickstart.md" },
+  { "Envoy Gateway" = "guides/envoy-gateway.md" },
+  { "OpenShift SSO" = "guides/openshift-sso.md" },
+]
+
+[[project.nav]]
+"Reference" = [
+  { "Overview" = "reference/index.md" },
+  { "OpenShellGateway" = "reference/openshellgateway.md" },
+  { "OpenShellProvider" = "reference/openshellprovider.md" },
+  { "OpenShellPolicy" = "reference/openshellpolicy.md" },
+]
+
+[[project.nav]]
+"Examples" = [
+  { "Overview" = "examples/index.md" },
+  { "Claude Code + Anthropic" = "examples/claude-code.md" },
+  { "Claude Code + Vertex AI" = "examples/vertex-ai.md" },
+  { "Developer Policy" = "examples/developer-policy.md" },
+]

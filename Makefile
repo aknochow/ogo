@@ -348,3 +348,15 @@ catalog-build: opm ## Build a catalog image.
 .PHONY: catalog-push
 catalog-push: ## Push a catalog image.
 	$(MAKE) image-push IMG=$(CATALOG_IMG)
+
+.PHONY: docs
+docs: ## Build the docs site into public/
+	python3 scripts/ogo-docs.py
+
+.PHONY: docs-serve
+docs-serve: ## Build and serve the docs site locally on port 8000
+	python3 scripts/ogo-docs.py serve
+
+.PHONY: docs-lint
+docs-lint: ## Lint docs frontmatter, nav, and links
+	python3 scripts/ogo-docs.py lint
