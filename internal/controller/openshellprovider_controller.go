@@ -79,7 +79,7 @@ func (r *OpenShellProviderReconciler) Reconcile(ctx context.Context, req ctrl.Re
 					Type: "Synced", Status: metav1.ConditionFalse,
 					Reason: "SecretNotFound", Message: fmt.Sprintf("Secret %q for credential %q not found", secretRef.Name, envVar),
 				})
-				provider.Status.Phase = "Failed"
+				provider.Status.Phase = phaseFailed
 				return ctrl.Result{}, r.Status().Update(ctx, provider)
 			}
 			return ctrl.Result{}, err
@@ -89,7 +89,7 @@ func (r *OpenShellProviderReconciler) Reconcile(ctx context.Context, req ctrl.Re
 				Type: "Synced", Status: metav1.ConditionFalse,
 				Reason: "KeyNotFound", Message: fmt.Sprintf("Key %q not found in Secret %q", secretRef.Key, secretRef.Name),
 			})
-			provider.Status.Phase = "Failed"
+			provider.Status.Phase = phaseFailed
 			return ctrl.Result{}, r.Status().Update(ctx, provider)
 		}
 	}
@@ -126,7 +126,7 @@ func (r *OpenShellProviderReconciler) findProvidersForSecret(ctx context.Context
 	if err := r.List(ctx, providers, client.InNamespace(obj.GetNamespace())); err != nil {
 		return nil
 	}
-	var requests []reconcile.Request
+	requests := make([]reconcile.Request, 0, len(providers.Items))
 	for _, p := range providers.Items {
 		for _, ref := range p.Spec.Credentials {
 			if ref.Name == obj.GetName() {
@@ -145,7 +145,7 @@ func (r *OpenShellProviderReconciler) findProvidersForGateway(ctx context.Contex
 	if err := r.List(ctx, providers); err != nil {
 		return nil
 	}
-	var requests []reconcile.Request
+	requests := make([]reconcile.Request, 0, len(providers.Items))
 	for _, p := range providers.Items {
 		requests = append(requests, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},

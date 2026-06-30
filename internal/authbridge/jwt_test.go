@@ -51,8 +51,8 @@ func TestMintToken(t *testing.T) {
 
 	headerJSON, _ := base64.RawURLEncoding.DecodeString(parts[0])
 	var header map[string]string
-	json.Unmarshal(headerJSON, &header)
-	if header["alg"] != "RS256" {
+	_ = json.Unmarshal(headerJSON, &header)
+	if header["alg"] != "RS256" { //nolint:goconst {
 		t.Errorf("alg = %q, want RS256", header["alg"])
 	}
 	if header["kid"] != signer.kid {
@@ -61,7 +61,7 @@ func TestMintToken(t *testing.T) {
 
 	claimsJSON, _ := base64.RawURLEncoding.DecodeString(parts[1])
 	var claims Claims
-	json.Unmarshal(claimsJSON, &claims)
+	_ = json.Unmarshal(claimsJSON, &claims)
 	if claims.Issuer != "http://localhost:8085" {
 		t.Errorf("iss = %q, want http://localhost:8085", claims.Issuer)
 	}
@@ -86,7 +86,7 @@ func TestMintTokenExpiry(t *testing.T) {
 	parts := strings.Split(token, ".")
 	claimsJSON, _ := base64.RawURLEncoding.DecodeString(parts[1])
 	var claims Claims
-	json.Unmarshal(claimsJSON, &claims)
+	_ = json.Unmarshal(claimsJSON, &claims)
 
 	now := time.Now().Unix()
 	if claims.ExpiresAt < now || claims.ExpiresAt > now+3601 {
@@ -116,10 +116,10 @@ func TestJWKS(t *testing.T) {
 	eBytes, _ := base64.RawURLEncoding.DecodeString(key.E)
 	n := new(big.Int).SetBytes(nBytes)
 	e := new(big.Int).SetBytes(eBytes)
-	if n.Cmp(signer.privateKey.PublicKey.N) != 0 {
+	if n.Cmp(signer.privateKey.N) != 0 {
 		t.Error("JWKS N does not match public key")
 	}
-	if int(e.Int64()) != signer.privateKey.PublicKey.E {
+	if int(e.Int64()) != signer.privateKey.E {
 		t.Error("JWKS E does not match public key")
 	}
 }

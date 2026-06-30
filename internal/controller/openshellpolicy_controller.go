@@ -67,7 +67,7 @@ func (r *OpenShellPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 			Type: "Synced", Status: metav1.ConditionFalse,
 			Reason: "InvalidSpec", Message: "policyName is required",
 		})
-		policy.Status.Phase = "Failed"
+		policy.Status.Phase = phaseFailed
 		return ctrl.Result{}, r.Status().Update(ctx, policy)
 	}
 
@@ -104,7 +104,7 @@ func (r *OpenShellPolicyReconciler) findPoliciesForGateway(ctx context.Context, 
 	if err := r.List(ctx, policies); err != nil {
 		return nil
 	}
-	var requests []reconcile.Request
+	requests := make([]reconcile.Request, 0, len(policies.Items))
 	for _, p := range policies.Items {
 		requests = append(requests, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace},

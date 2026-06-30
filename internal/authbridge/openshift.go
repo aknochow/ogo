@@ -71,7 +71,7 @@ func (c *OpenShiftClient) ExchangeCode(ctx context.Context, code, redirectURI st
 	if err != nil {
 		return nil, fmt.Errorf("token exchange: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
@@ -108,7 +108,7 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string) (
 	if err != nil {
 		return nil, fmt.Errorf("user info request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))

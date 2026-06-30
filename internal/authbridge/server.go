@@ -79,7 +79,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/token", s.handleToken)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "ok")
+		_, _ = fmt.Fprint(w, "ok")
 	})
 	return securityHeaders(mux)
 }

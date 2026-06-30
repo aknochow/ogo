@@ -54,12 +54,15 @@ import (
 )
 
 const (
-	finalizerName   = "ogo.aknochow.io/gateway-cleanup"
-	labelManagedBy  = "app.kubernetes.io/managed-by"
-	labelInstance   = "app.kubernetes.io/instance"
-	labelName       = "app.kubernetes.io/name"
-	labelPartOf     = "app.kubernetes.io/part-of"
-	requeueInterval = 60 * time.Second
+	finalizerName    = "ogo.aknochow.io/gateway-cleanup"
+	labelManagedBy   = "app.kubernetes.io/managed-by"
+	labelInstance    = "app.kubernetes.io/instance"
+	labelName        = "app.kubernetes.io/name"
+	labelPartOf      = "app.kubernetes.io/part-of"
+	requeueInterval  = 60 * time.Second
+	managedByValue   = "ogo"
+	defaultNamespace = "ogo"
+	phaseFailed      = "Failed"
 )
 
 type OpenShellGatewayReconciler struct {
@@ -317,7 +320,7 @@ func (r *OpenShellGatewayReconciler) reconcileNamespace(ctx context.Context, gw 
 			if ns.Labels == nil {
 				ns.Labels = map[string]string{}
 			}
-			ns.Labels[labelManagedBy] = "ogo"
+			ns.Labels[labelManagedBy] = managedByValue
 			return nil
 		})
 		if err != nil {
@@ -517,11 +520,11 @@ func (r *OpenShellGatewayReconciler) reconcileSelfSignedTLS(ctx context.Context,
 		return fmt.Errorf("creating server TLS secret: %w", err)
 	}
 
-	client := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: clientSecretName, Namespace: ns}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, client, func() error {
-		client.Labels = gatewayLabels(gw)
-		client.Type = corev1.SecretTypeTLS
-		client.Data = map[string][]byte{"tls.crt": bundle.ClientCert, "tls.key": bundle.ClientKey, "ca.crt": bundle.CACert}
+	clientTLSSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: clientSecretName, Namespace: ns}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, clientTLSSecret, func() error {
+		clientTLSSecret.Labels = gatewayLabels(gw)
+		clientTLSSecret.Type = corev1.SecretTypeTLS
+		clientTLSSecret.Data = map[string][]byte{"tls.crt": bundle.ClientCert, "tls.key": bundle.ClientKey, "ca.crt": bundle.CACert}
 		return nil
 	}); err != nil {
 		return fmt.Errorf("creating client TLS secret: %w", err)
@@ -1279,7 +1282,7 @@ func (r *OpenShellGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 func (r *OpenShellGatewayReconciler) findGatewayForManagedResource(ctx context.Context, obj client.Object) []reconcile.Request {
 	labels := obj.GetLabels()
-	if labels[labelManagedBy] != "ogo" {
+	if labels[labelManagedBy] != managedByValue {
 		return nil
 	}
 	name := labels[labelInstance]
@@ -1295,7 +1298,7 @@ func gatewayNamespace(gw *ogov1alpha1.OpenShellGateway) string {
 	if gw.Spec.Namespace != "" {
 		return gw.Spec.Namespace
 	}
-	return "ogo"
+	return defaultNamespace
 }
 
 func sandboxNamespace(gw *ogov1alpha1.OpenShellGateway) string {
@@ -1317,7 +1320,7 @@ func uniqueNamespaces(gw *ogov1alpha1.OpenShellGateway) []string {
 func gatewayLabels(gw *ogov1alpha1.OpenShellGateway) map[string]string {
 	return map[string]string{
 		labelName: "openshell", labelInstance: gw.Name,
-		labelManagedBy: "ogo", labelPartOf: "openshell-gateway",
+		labelManagedBy: managedByValue, labelPartOf: "openshell-gateway",
 	}
 }
 
