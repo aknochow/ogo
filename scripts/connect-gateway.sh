@@ -10,7 +10,7 @@ set -euo pipefail
 #
 # Examples:
 #   ./scripts/connect-gateway.sh                          # defaults: openshell / openshell / current context
-#   ./scripts/connect-gateway.sh rdu openshell ~/.kube/rdu
+#   ./scripts/connect-gateway.sh openshell ogo ~/.kube/my-cluster
 
 GATEWAY_NAME="${1:-openshell}"
 NAMESPACE="${2:-ogo}"

@@ -31,3 +31,10 @@ index.Dockerfile*
 
 # Dev containers
 .devcontainer/
+
+# Secrets and credentials
+.env
+.env.*
+*.pem
+*.key
+kubeconfig

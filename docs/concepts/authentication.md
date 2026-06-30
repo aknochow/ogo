@@ -22,7 +22,7 @@ OpenShift OAuth tokens into standard OIDC JWTs. Users log in with their
 OpenShift credentials via browser.
 
 ```bash
-openshell gateway login sno
+openshell gateway login my-cluster
 # Browser opens → OpenShift login → JWT stored locally
 ```
 
@@ -74,7 +74,7 @@ The first authenticator that matches handles the request.
 
 ## Security considerations
 
-- Tokens are Ed25519-signed JWTs with configurable TTL (default 8h)
+- Tokens are RSA-signed (RS256) JWTs with configurable TTL (default 8h)
 - The auth-bridge generates a new signing keypair on every restart,
   invalidating all existing tokens
 - The `adminGroup` field maps an OpenShift group to the

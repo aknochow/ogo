@@ -96,7 +96,7 @@ spec:
 ## 5. Connect
 
 ```bash
-openshell sandbox create --gateway sno
+openshell sandbox create --gateway my-cluster
 # Inside the sandbox, Claude Code picks up the Vertex credentials automatically:
 claude
 ```

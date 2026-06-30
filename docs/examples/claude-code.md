@@ -67,7 +67,7 @@ spec:
 ## 4. Connect
 
 ```bash
-openshell sandbox create --gateway sno
+openshell sandbox create --gateway my-cluster
 # Inside the sandbox:
 claude
 ```
@@ -77,7 +77,7 @@ claude
 Skip the Provider and Policy CRs entirely. Users bring their own key:
 
 ```bash
-openshell sandbox create --gateway sno
+openshell sandbox create --gateway my-cluster
 # Inside the sandbox:
 export ANTHROPIC_API_KEY=sk-ant-...
 claude

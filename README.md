@@ -81,8 +81,7 @@ make manifests      # Regenerate CRDs and RBAC
 make generate       # Regenerate deepcopy functions
 ```
 
-See [CLAUDE.md](CLAUDE.md) for versioning rules, image ownership, and build pipeline.
-See [AGENTS.md](AGENTS.md) for AI agent instructions.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup and guidelines.
 
 ## License
 

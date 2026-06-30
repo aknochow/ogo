@@ -59,9 +59,9 @@ Edit the sample to set your `route.hostname` before applying.
 ## 5. Connect
 
 ```bash
-openshell gateway add https://openshell.apps.your-cluster.example.com sno
-openshell gateway login sno
-openshell sandbox create --gateway sno
+openshell gateway add https://openshell.apps.your-cluster.example.com my-cluster
+openshell gateway login my-cluster
+openshell sandbox create --gateway my-cluster
 ```
 
 ## Next steps

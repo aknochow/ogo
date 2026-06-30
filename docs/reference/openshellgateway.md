@@ -66,6 +66,7 @@ tags: [crd, gateway]
 |-------|------|---------|-------------|
 | `allowUnauthenticated` | bool | `false` | Allow unauthenticated access (dev only) |
 | `openshift.enabled` | bool | (auto) | Enable auth-bridge for OpenShift SSO |
+| `openshift.userGroup` | string | yes (when SSO enabled) | OpenShift group required for SSO access |
 | `openshift.adminGroup` | string | | OpenShift group for admin role |
 | `openshift.tokenTTL` | string | `8h` | OIDC token lifetime |
 

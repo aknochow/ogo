@@ -1,5 +1,5 @@
 # OGO extension targets — included by the main Makefile.
-# Adds calver tagging, podzilla remote builds, and OLMv1 deployment.
+# Adds calver tagging, remote podman builds, and OLMv1 deployment.
 
 # --- Calver Tagging ---
 
@@ -14,7 +14,7 @@ OGO_CATALOG_IMG   = $(IMAGE_TAG_BASE)-catalog:$(TAG)
 OGO_AUTH_IMG      = quay.io/aknochow/ogo-auth-bridge:$(TAG)
 
 # Remote podman connection for amd64 builds from Apple Silicon
-REMOTE_PODMAN ?= podman --connection podzilla
+REMOTE_PODMAN ?= podman --connection remote
 
 ##@ OGO Pipeline
 
@@ -27,7 +27,7 @@ show-tag: ## Show the TAG that will be used for images
 	@echo "OGO_AUTH_IMG=$(OGO_AUTH_IMG)"
 
 .PHONY: ogo-build
-ogo-build: ## Build operator + auth-bridge images on podzilla (amd64)
+ogo-build: ## Build operator + auth-bridge images via remote podman (amd64)
 	@echo "Building operator image $(OGO_IMG)..."
 	$(REMOTE_PODMAN) build -f Containerfile -t $(OGO_IMG) .
 	@echo "Building auth-bridge image $(OGO_AUTH_IMG)..."
@@ -49,7 +49,7 @@ ogo-bundle: manifests kustomize operator-sdk ## Generate bundle with calver tag
 	@echo "Bundle generated for $(OGO_IMG)"
 
 .PHONY: ogo-bundle-build
-ogo-bundle-build: ## Build bundle image on podzilla
+ogo-bundle-build: ## Build bundle image via remote podman
 	$(REMOTE_PODMAN) build -f bundle.Dockerfile -t $(OGO_BUNDLE_IMG) .
 
 .PHONY: ogo-bundle-push
