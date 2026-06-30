@@ -93,8 +93,8 @@ func TestJWKSEndpoint(t *testing.T) {
 	if len(jwks.Keys) != 1 {
 		t.Fatalf("keys = %d, want 1", len(jwks.Keys))
 	}
-	if jwks.Keys[0].Alg != "EdDSA" {
-		t.Errorf("alg = %q, want EdDSA", jwks.Keys[0].Alg)
+	if jwks.Keys[0].Alg != "RS256" {
+		t.Errorf("alg = %q, want RS256", jwks.Keys[0].Alg)
 	}
 }
 

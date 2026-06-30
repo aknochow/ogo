@@ -537,7 +537,28 @@ func (r *OpenShellGatewayReconciler) reconcileJWTKeys(ctx context.Context, gw *o
 }
 
 func (r *OpenShellGatewayReconciler) reconcileAuthBridgeKeys(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
-	return r.ensureEd25519KeySecret(ctx, gw, gw.Name+"-auth-bridge-keys")
+	ns := gatewayNamespace(gw)
+	secretName := gw.Name + "-auth-bridge-keys"
+	existing := &corev1.Secret{}
+	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing)
+	if err == nil {
+		return nil
+	}
+	if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("checking auth-bridge keys: %w", err)
+	}
+
+	keys, err := pki.GenerateRSAKeys()
+	if err != nil {
+		return fmt.Errorf("generating auth-bridge RSA keys: %w", err)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: ns, Labels: gatewayLabels(gw)},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{"signing.pem": keys.SigningKey, "public.pem": keys.PublicKey, "kid": []byte(keys.KID)},
+	}
+	return r.Create(ctx, secret)
 }
 
 func (r *OpenShellGatewayReconciler) ensureEd25519KeySecret(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, secretName string) error {

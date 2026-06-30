@@ -91,7 +91,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 	base := s.config.ExternalIssuer
 	issuer := s.config.ExternalIssuer
 	host := r.Host
-	if host == "localhost:8085" || host == "127.0.0.1:8085" {
+	if strings.HasPrefix(host, "localhost") || strings.HasPrefix(host, "127.0.0.1") {
 		base = s.config.Issuer
 		issuer = s.config.Issuer
 	}

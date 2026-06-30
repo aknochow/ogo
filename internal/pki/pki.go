@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -89,6 +90,35 @@ func GeneratePKI(sans []string) (*Bundle, error) {
 		ServerKey:  serverKey,
 		ClientCert: clientCert,
 		ClientKey:  clientKey,
+	}, nil
+}
+
+// GenerateRSAKeys creates an RSA 2048-bit keypair for JWT signing.
+// Used by the auth-bridge, which needs RS256 to match the NVIDIA
+// gateway's OIDC validation (hardcoded to RS256).
+func GenerateRSAKeys() (*JWTKeys, error) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return nil, fmt.Errorf("generating RSA key: %w", err)
+	}
+
+	privBytes, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling RSA private key: %w", err)
+	}
+
+	pubBytes := x509.MarshalPKCS1PublicKey(&key.PublicKey)
+
+	privPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
+	pubPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PUBLIC KEY", Bytes: pubBytes})
+
+	hash := sha256.Sum256(pubBytes)
+	kid := hex.EncodeToString(hash[:16])
+
+	return &JWTKeys{
+		SigningKey: privPEM,
+		PublicKey:  pubPEM,
+		KID:        kid,
 	}, nil
 }
 

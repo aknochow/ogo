@@ -1,8 +1,9 @@
 package authbridge
 
 import (
-	"crypto/ed25519"
+	"crypto"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -10,14 +11,14 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"strings"
 	"time"
 )
 
 type JWTSigner struct {
-	privateKey ed25519.PrivateKey
-	publicKey  ed25519.PublicKey
+	privateKey *rsa.PrivateKey
 	kid        string
 }
 
@@ -27,22 +28,23 @@ func NewJWTSigner() (*JWTSigner, error) {
 	kidPath := os.Getenv("AUTH_BRIDGE_KID")
 
 	if signingKeyPath != "" && publicKeyPath != "" {
-		return loadJWTSigner(signingKeyPath, publicKeyPath, kidPath)
+		return loadJWTSigner(signingKeyPath, kidPath)
 	}
 	return generateJWTSigner()
 }
 
 func generateJWTSigner() (*JWTSigner, error) {
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, fmt.Errorf("generating Ed25519 key: %w", err)
+		return nil, fmt.Errorf("generating RSA key: %w", err)
 	}
-	hash := sha256.Sum256(pub)
+	pubBytes := x509.MarshalPKCS1PublicKey(&key.PublicKey)
+	hash := sha256.Sum256(pubBytes)
 	kid := hex.EncodeToString(hash[:16])
-	return &JWTSigner{privateKey: priv, publicKey: pub, kid: kid}, nil
+	return &JWTSigner{privateKey: key, kid: kid}, nil
 }
 
-func loadJWTSigner(signingKeyPath, publicKeyPath, kidPath string) (*JWTSigner, error) {
+func loadJWTSigner(signingKeyPath, kidPath string) (*JWTSigner, error) {
 	signingPEM, err := os.ReadFile(signingKeyPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading signing key from %s: %w", signingKeyPath, err)
@@ -55,38 +57,25 @@ func loadJWTSigner(signingKeyPath, publicKeyPath, kidPath string) (*JWTSigner, e
 	if err != nil {
 		return nil, fmt.Errorf("parsing signing key: %w", err)
 	}
-	priv, ok := key.(ed25519.PrivateKey)
+	rsaKey, ok := key.(*rsa.PrivateKey)
 	if !ok {
-		return nil, fmt.Errorf("signing key is not Ed25519")
+		return nil, fmt.Errorf("signing key is not RSA")
 	}
 
-	publicPEM, err := os.ReadFile(publicKeyPath)
-	if err != nil {
-		return nil, fmt.Errorf("reading public key from %s: %w", publicKeyPath, err)
-	}
-	pubBlock, _ := pem.Decode(publicPEM)
-	if pubBlock == nil {
-		return nil, fmt.Errorf("no PEM block found in %s", publicKeyPath)
-	}
-	pubKey, err := x509.ParsePKIXPublicKey(pubBlock.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parsing public key: %w", err)
-	}
-	pub, ok := pubKey.(ed25519.PublicKey)
-	if !ok {
-		return nil, fmt.Errorf("public key is not Ed25519")
-	}
-
-	hash := sha256.Sum256(pub)
-	kid := hex.EncodeToString(hash[:16])
+	kid := ""
 	if kidPath != "" {
 		kidBytes, err := os.ReadFile(kidPath)
 		if err == nil {
 			kid = strings.TrimSpace(string(kidBytes))
 		}
 	}
+	if kid == "" {
+		pubBytes := x509.MarshalPKCS1PublicKey(&rsaKey.PublicKey)
+		hash := sha256.Sum256(pubBytes)
+		kid = hex.EncodeToString(hash[:16])
+	}
 
-	return &JWTSigner{privateKey: priv, publicKey: pub, kid: kid}, nil
+	return &JWTSigner{privateKey: rsaKey, kid: kid}, nil
 }
 
 type Claims struct {
@@ -117,7 +106,7 @@ func (s *JWTSigner) MintToken(issuer, audience, subject, username, email string,
 		RealmAccess:       RealmAccess{Roles: roles},
 	}
 
-	header := map[string]string{"alg": "EdDSA", "typ": "JWT", "kid": s.kid}
+	header := map[string]string{"alg": "RS256", "typ": "JWT", "kid": s.kid}
 
 	headerJSON, err := json.Marshal(header)
 	if err != nil {
@@ -132,7 +121,11 @@ func (s *JWTSigner) MintToken(issuer, audience, subject, username, email string,
 	claimsB64 := base64.RawURLEncoding.EncodeToString(claimsJSON)
 	signingInput := headerB64 + "." + claimsB64
 
-	signature := ed25519.Sign(s.privateKey, []byte(signingInput))
+	hash := sha256.Sum256([]byte(signingInput))
+	signature, err := rsa.SignPKCS1v15(rand.Reader, s.privateKey, crypto.SHA256, hash[:])
+	if err != nil {
+		return "", fmt.Errorf("signing JWT: %w", err)
+	}
 	sigB64 := base64.RawURLEncoding.EncodeToString(signature)
 
 	return signingInput + "." + sigB64, nil
@@ -144,22 +137,23 @@ type JWKSResponse struct {
 
 type JWK struct {
 	Kty string `json:"kty"`
-	Crv string `json:"crv"`
-	X   string `json:"x"`
+	N   string `json:"n"`
+	E   string `json:"e"`
 	Kid string `json:"kid"`
 	Use string `json:"use"`
 	Alg string `json:"alg"`
 }
 
 func (s *JWTSigner) JWKS() JWKSResponse {
+	pub := &s.privateKey.PublicKey
 	return JWKSResponse{
 		Keys: []JWK{{
-			Kty: "OKP",
-			Crv: "Ed25519",
-			X:   base64.RawURLEncoding.EncodeToString(s.publicKey),
+			Kty: "RSA",
+			N:   base64.RawURLEncoding.EncodeToString(pub.N.Bytes()),
+			E:   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
 			Kid: s.kid,
 			Use: "sig",
-			Alg: "EdDSA",
+			Alg: "RS256",
 		}},
 	}
 }
