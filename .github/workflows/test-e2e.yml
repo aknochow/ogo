@@ -87,16 +87,6 @@ jobs:
           sudo podman exec microshift podman load -i /tmp/ogo-image.tar
           rm -f /tmp/ogo-image.tar
 
-      - name: Deploy operator
-        run: |
-          make deploy IMG=${{ env.IMG }}
-
-      - name: Wait for operator
-        run: |
-          kubectl wait --for=condition=Available deployment/ogo-controller-manager \
-            -n ogo --timeout=120s
-          kubectl get pods -n ogo
-
       - name: Run e2e tests
         run: |
           SKIP_BUILD=true CERT_MANAGER_INSTALL_SKIP=true IMG=${{ env.IMG }} \
