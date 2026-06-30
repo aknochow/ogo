@@ -107,12 +107,12 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"scopes_supported":                      []string{"openid", "profile", "email"},
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(discovery)
+	_ = json.NewEncoder(w).Encode(discovery)
 }
 
 func (s *Server) handleJWKS(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.signer.JWKS())
+	_ = json.NewEncoder(w).Encode(s.signer.JWKS())
 }
 
 func (s *Server) isAllowedRedirectURI(uri string) bool {
@@ -297,7 +297,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"access_token": pending.jwt,
 		"token_type":   "Bearer",
 		"expires_in":   int(s.config.TokenTTL.Seconds()),

@@ -69,7 +69,9 @@ func TestDiscoveryLocalhost(t *testing.T) {
 	handler.ServeHTTP(w, req)
 
 	var discovery map[string]interface{}
-	json.NewDecoder(w.Body).Decode(&discovery)
+	if err := json.NewDecoder(w.Body).Decode(&discovery); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
 	if discovery["issuer"] != "http://localhost:8085" {
 		t.Errorf("issuer = %v, want internal issuer for localhost", discovery["issuer"])
 	}
