@@ -1,14 +1,14 @@
 ---
 type: Concept
 title: Why OpenShift
-description: Why OGO targets OpenShift — the security and platform features that make it safe to run untrusted AI agent workloads.
+description: Why OGO targets OpenShift - the security and platform features that make it safe to run untrusted AI agent workloads.
 tags: [architecture, security, openshift]
 ---
 
 # Why OpenShift
 
 AI coding agents run arbitrary code in sandboxes. They install packages,
-modify files, execute shell commands, and make network requests — all
+modify files, execute shell commands, and make network requests - all
 autonomously. This is an inherently adversarial workload that requires
 defense-in-depth security controls.
 
@@ -45,7 +45,7 @@ policies (which control per-binary egress to specific hosts and ports)
 are enforced in addition to Kubernetes NetworkPolicies.
 
 On vanilla Kubernetes, NetworkPolicy enforcement depends on the CNI
-plugin installed — and many CNIs don't enforce them at all.
+plugin installed - and many CNIs don't enforce them at all.
 
 ## Integrated OAuth
 
@@ -90,6 +90,6 @@ complete audit trail for compliance and incident response.
 
 ## See also
 
-- [Authentication](authentication.md) — how SSO works with the auth-bridge
-- [Policy](policy.md) — sandbox network and filesystem controls
-- [Envoy Gateway guide](../guides/envoy-gateway.md) — TLS termination
+- [Authentication](authentication.md) - how SSO works with the auth-bridge
+- [Policy](policy.md) - sandbox network and filesystem controls
+- [Envoy Gateway guide](../guides/envoy-gateway.md) - TLS termination

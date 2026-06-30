@@ -1,7 +1,7 @@
 ---
 type: Concept
 title: Authentication
-description: How users and sandboxes authenticate to the OpenShell gateway — OpenShift SSO, external OIDC, mTLS, and K8s ServiceAccount bootstrap.
+description: How users and sandboxes authenticate to the OpenShell gateway - OpenShift SSO, external OIDC, mTLS, and K8s ServiceAccount bootstrap.
 tags: [core, security, auth]
 ---
 
@@ -59,16 +59,16 @@ authenticate to the gateway to establish its relay session.
 4. The gateway mints a short-lived JWT for the sandbox
 5. The supervisor uses this JWT for all subsequent calls
 
-This flow is fully automatic — no user interaction required.
+This flow is fully automatic - no user interaction required.
 
 ## Authentication chain
 
 The gateway evaluates authenticators in order:
 
-1. **K8s ServiceAccount** — scoped to `IssueSandboxToken` only
-2. **Sandbox JWT** — gateway-minted tokens for sandbox relay
-3. **OIDC** — user tokens from auth-bridge or external provider
-4. **mTLS** — client certificate identity (when TLS is enabled)
+1. **K8s ServiceAccount** - scoped to `IssueSandboxToken` only
+2. **Sandbox JWT** - gateway-minted tokens for sandbox relay
+3. **OIDC** - user tokens from auth-bridge or external provider
+4. **mTLS** - client certificate identity (when TLS is enabled)
 
 The first authenticator that matches handles the request.
 
@@ -85,5 +85,5 @@ The first authenticator that matches handles the request.
 ## See also
 
 - [OpenShift SSO guide](../guides/openshift-sso.md)
-- [OpenShellGateway CRD](../reference/openshellgateway.md) — `spec.auth` fields
-- [Gateway concept](gateway.md) — architecture overview
+- [OpenShellGateway CRD](../reference/openshellgateway.md) - `spec.auth` fields
+- [Gateway concept](gateway.md) - architecture overview

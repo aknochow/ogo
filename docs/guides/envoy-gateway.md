@@ -54,7 +54,7 @@ Set the hostname in the CR:
 ```yaml
 spec:
   tls:
-    enabled: false          # gateway pod doesn't need TLS — Envoy handles it
+    enabled: false          # gateway pod doesn't need TLS - Envoy handles it
     certManager:
       enabled: true         # cert-manager issues the Let's Encrypt cert
       issuerName: letsencrypt

@@ -13,14 +13,14 @@ API on port 8080.
 
 ## What it does
 
-- **Sandbox lifecycle** — creates, lists, and deletes sandbox pods via the
+- **Sandbox lifecycle** - creates, lists, and deletes sandbox pods via the
   Kubernetes Sandbox CRD (`agents.x-k8s.io/v1beta1`)
-- **Authentication** — validates OIDC tokens (from the [auth-bridge](../guides/openshift-sso.md)
+- **Authentication** - validates OIDC tokens (from the [auth-bridge](../guides/openshift-sso.md)
   or external providers) and Kubernetes ServiceAccount tokens (for supervisor bootstrap)
-- **Relay sessions** — proxies SSH connections between the CLI and sandbox
+- **Relay sessions** - proxies SSH connections between the CLI and sandbox
   supervisors over gRPC streams
-- **Provider injection** — delivers API credentials to sandbox pods at startup
-- **Policy enforcement** — pushes network, filesystem, and process policies to
+- **Provider injection** - delivers API credentials to sandbox pods at startup
+- **Policy enforcement** - pushes network, filesystem, and process policies to
   sandbox supervisors
 
 ## Architecture
@@ -39,7 +39,7 @@ On OpenShift with [Envoy Gateway](../guides/envoy-gateway.md):
 ## Gateway image
 
 The gateway binary is built and published by NVIDIA at
-`ghcr.io/nvidia/openshell/gateway`. OGO deploys this image — the operator
+`ghcr.io/nvidia/openshell/gateway`. OGO deploys this image - the operator
 does not build or modify the gateway binary.
 
 The `spec.image` and `spec.imageTag` fields on the
@@ -57,7 +57,7 @@ the gateway pod. The TOML includes:
 - JWT signing key paths
 - Kubernetes driver settings (namespace, supervisor image, SA token TTL)
 
-The operator manages this file — do not edit the ConfigMap directly.
+The operator manages this file - do not edit the ConfigMap directly.
 
 ## See also
 

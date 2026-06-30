@@ -1,7 +1,7 @@
 ---
 type: Concept
 title: Policy
-description: Policies control what sandboxes can access — network endpoints, filesystem paths, and process identity.
+description: Policies control what sandboxes can access - network endpoints, filesystem paths, and process identity.
 tags: [core, security]
 ---
 
@@ -15,11 +15,11 @@ CRD configures three dimensions of control:
 Controls which external hosts and ports the sandbox can reach. Each rule
 specifies:
 
-- **Endpoints** — hostname (supports globs like `*.googleapis.com`), port,
+- **Endpoints** - hostname (supports globs like `*.googleapis.com`), port,
   protocol (`rest`, `websocket`, `graphql`, `sql`), and access level
   (`read-only`, `read-write`, `full`)
-- **Binaries** — which executables are allowed to use these endpoints
-- **Enforcement** — `enforce` (block violations) or `audit` (log only)
+- **Binaries** - which executables are allowed to use these endpoints
+- **Enforcement** - `enforce` (block violations) or `audit` (log only)
 
 The supervisor enforces network policies at the process level using eBPF-based
 interception. Traffic from unlisted binaries or to unlisted endpoints is blocked.
@@ -28,10 +28,10 @@ interception. Traffic from unlisted binaries or to unlisted endpoints is blocked
 
 Controls which paths the sandbox can read and write:
 
-- `includeWorkdir: true` — the sandbox working directory (`/sandbox`) is
+- `includeWorkdir: true` - the sandbox working directory (`/sandbox`) is
   automatically read-write
-- `readOnly` — paths accessible for reading (e.g., `/usr`, `/etc`)
-- `readWrite` — paths accessible for writing (e.g., `/tmp`, `/dev/null`)
+- `readOnly` - paths accessible for reading (e.g., `/usr`, `/etc`)
+- `readWrite` - paths accessible for writing (e.g., `/tmp`, `/dev/null`)
 
 Enforced via Landlock LSM on supported kernels.
 
@@ -39,8 +39,8 @@ Enforced via Landlock LSM on supported kernels.
 
 Controls the identity of processes inside the sandbox:
 
-- `runAsUser` — the user name or UID (default: `sandbox`)
-- `runAsGroup` — the group name or GID (default: `sandbox`)
+- `runAsUser` - the user name or UID (default: `sandbox`)
+- `runAsGroup` - the group name or GID (default: `sandbox`)
 
 ## Default policy
 
@@ -52,11 +52,11 @@ default:
 - Network: **no external access** (empty network policy)
 - Process: `sandbox:sandbox`
 
-This means sandboxes cannot reach any external API by default — you must
+This means sandboxes cannot reach any external API by default - you must
 create a policy to allow it.
 
 ## See also
 
 - [OpenShellPolicy CRD](../reference/openshellpolicy.md)
 - [Developer Policy example](../examples/developer-policy.md)
-- [Provider](provider.md) — providers define which endpoints need access
+- [Provider](provider.md) - providers define which endpoints need access

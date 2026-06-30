@@ -14,13 +14,13 @@ security policies.
 
 ## Lifecycle
 
-1. **Create** — the CLI calls `CreateSandbox`; the gateway creates a
+1. **Create** - the CLI calls `CreateSandbox`; the gateway creates a
    `Sandbox` CRD object (`agents.x-k8s.io/v1beta1`); the Sandbox controller
    creates the pod
-2. **Bootstrap** — the supervisor sidecar starts, exchanges its K8s SA token
+2. **Bootstrap** - the supervisor sidecar starts, exchanges its K8s SA token
    for a gateway JWT via `IssueSandboxToken`, then connects the relay session
-3. **Ready** — the sandbox accepts SSH connections from the CLI
-4. **Delete** — the CLI calls `DeleteSandbox`; the gateway deletes the
+3. **Ready** - the sandbox accepts SSH connections from the CLI
+4. **Delete** - the CLI calls `DeleteSandbox`; the gateway deletes the
    Sandbox CRD; the controller cleans up the pod and PVC
 
 ## Pod structure
@@ -59,5 +59,5 @@ persists across sandbox restarts but is deleted when the sandbox is deleted.
 
 ## See also
 
-- [Policy](policy.md) — control what sandboxes can access
-- [Provider](provider.md) — inject API credentials into sandboxes
+- [Policy](policy.md) - control what sandboxes can access
+- [Provider](provider.md) - inject API credentials into sandboxes

@@ -66,6 +66,6 @@ openshell sandbox create --gateway my-cluster
 
 ## Next steps
 
-- [Envoy Gateway](envoy-gateway.md) — eliminate `--gateway-insecure` with proper TLS
-- [OpenShift SSO](openshift-sso.md) — understand the auth-bridge
-- [Provider](../concepts/provider.md) — inject API keys into sandboxes
+- [Envoy Gateway](envoy-gateway.md) - eliminate `--gateway-insecure` with proper TLS
+- [OpenShift SSO](openshift-sso.md) - understand the auth-bridge
+- [Provider](../concepts/provider.md) - inject API keys into sandboxes

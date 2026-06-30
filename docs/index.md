@@ -1,10 +1,10 @@
 ---
 type: Index
 title: OGO Documentation
-description: OpenShell Gateway Operator — deploy and manage OpenShell on OpenShift.
+description: OpenShell Gateway Operator - deploy and manage OpenShell on OpenShift.
 ---
 
-# OGO — OpenShell Gateway Operator
+# OGO - OpenShell Gateway Operator
 
 > **Alpha software.** OGO and [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell)
 > are both in active development. APIs, CRDs, and behavior may change without
@@ -18,36 +18,36 @@ lifecycle so you can run AI coding agents in isolated cloud sandboxes.
 
 Core building blocks of an OGO deployment.
 
-- [Why OpenShift](concepts/why-openshift.md) — security and platform features for AI agent workloads
-- [Gateway](concepts/gateway.md) — the central gRPC server that manages sandboxes
-- [Sandbox](concepts/sandbox.md) — isolated compute pods where agents run
-- [Authentication](concepts/authentication.md) — how users and sandboxes authenticate
-- [Provider](concepts/provider.md) — API credentials injected into sandboxes
-- [Policy](concepts/policy.md) — network, filesystem, and process controls for sandboxes
+- [Why OpenShift](concepts/why-openshift.md) - security and platform features for AI agent workloads
+- [Gateway](concepts/gateway.md) - the central gRPC server that manages sandboxes
+- [Sandbox](concepts/sandbox.md) - isolated compute pods where agents run
+- [Authentication](concepts/authentication.md) - how users and sandboxes authenticate
+- [Provider](concepts/provider.md) - API credentials injected into sandboxes
+- [Policy](concepts/policy.md) - network, filesystem, and process controls for sandboxes
 
 ## Guides
 
 Step-by-step walkthroughs.
 
-- [Quickstart](guides/quickstart.md) — deploy OGO on OpenShift in 10 minutes
-- [Envoy Gateway](guides/envoy-gateway.md) — gRPC ingress with Let's Encrypt TLS
-- [OpenShift SSO](guides/openshift-sso.md) — "Log in with OpenShift" for the CLI
+- [Quickstart](guides/quickstart.md) - deploy OGO on OpenShift in 10 minutes
+- [Envoy Gateway](guides/envoy-gateway.md) - gRPC ingress with Let's Encrypt TLS
+- [OpenShift SSO](guides/openshift-sso.md) - "Log in with OpenShift" for the CLI
 
 ## Reference
 
 CRD specifications and field-level documentation.
 
-- [OpenShellGateway](reference/openshellgateway.md) — gateway CRD reference
-- [OpenShellProvider](reference/openshellprovider.md) — provider CRD reference
-- [OpenShellPolicy](reference/openshellpolicy.md) — policy CRD reference
+- [OpenShellGateway](reference/openshellgateway.md) - gateway CRD reference
+- [OpenShellProvider](reference/openshellprovider.md) - provider CRD reference
+- [OpenShellPolicy](reference/openshellpolicy.md) - policy CRD reference
 
 ## Examples
 
 Ready-to-use configurations.
 
-- [Claude Code + Anthropic](examples/claude-code.md) — direct Anthropic API access
-- [Claude Code + Vertex AI](examples/vertex-ai.md) — Google Vertex AI inference
-- [Developer Policy](examples/developer-policy.md) — GitHub, PyPI, npm access
+- [Claude Code + Anthropic](examples/claude-code.md) - direct Anthropic API access
+- [Claude Code + Vertex AI](examples/vertex-ai.md) - Google Vertex AI inference
+- [Developer Policy](examples/developer-policy.md) - GitHub, PyPI, npm access
 
 ## Development
 

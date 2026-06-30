@@ -7,7 +7,7 @@ tags: [core, credentials]
 
 # Provider
 
-A provider represents an external service that sandboxes need access to —
+A provider represents an external service that sandboxes need access to -
 an LLM inference API, a source control platform, or a cloud service. The
 `OpenShellProvider` CRD tells the operator which credentials to inject and
 how to refresh them.
@@ -34,11 +34,11 @@ how to refresh them.
 The OpenShell gateway ships with built-in profiles that define the endpoints,
 binaries, and credential shapes for common services:
 
-- `claude-code` — Anthropic API (`api.anthropic.com`)
-- `google-vertex-ai` — Vertex AI with service account token refresh
-- `github` — GitHub API and git operations
-- `google-cloud` — GCP APIs
-- `aws-bedrock` — AWS Bedrock (bridge-fronted)
+- `claude-code` - Anthropic API (`api.anthropic.com`)
+- `google-vertex-ai` - Vertex AI with service account token refresh
+- `github` - GitHub API and git operations
+- `google-cloud` - GCP APIs
+- `aws-bedrock` - AWS Bedrock (bridge-fronted)
 
 Set `spec.providerType` to one of these names. The gateway handles endpoint
 allowlisting and credential injection automatically.
@@ -48,4 +48,4 @@ allowlisting and credential injection automatically.
 - [OpenShellProvider CRD](../reference/openshellprovider.md)
 - [Claude Code example](../examples/claude-code.md)
 - [Vertex AI example](../examples/vertex-ai.md)
-- [Policy](policy.md) — network policies must allow the provider endpoints
+- [Policy](policy.md) - network policies must allow the provider endpoints

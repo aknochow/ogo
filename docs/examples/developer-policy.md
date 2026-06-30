@@ -87,9 +87,9 @@ spec:
 
 ## Notes
 
-- GitHub endpoints default to **read-only** — agents can read code and
+- GitHub endpoints default to **read-only** - agents can read code and
   issues but can't push or create PRs without an explicit policy upgrade
-- PyPI and npm access is scoped to the package manager binaries only —
+- PyPI and npm access is scoped to the package manager binaries only -
   arbitrary `curl` to these hosts is blocked
 - Combine with a [Claude Code](claude-code.md) or [Vertex AI](vertex-ai.md)
   policy for full agent capability

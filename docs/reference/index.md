@@ -6,6 +6,6 @@ description: CRD specifications and field-level documentation.
 
 # Reference
 
-- [OpenShellGateway](openshellgateway.md) — gateway CRD reference
-- [OpenShellProvider](openshellprovider.md) — provider CRD reference
-- [OpenShellPolicy](openshellpolicy.md) — policy CRD reference
+- [OpenShellGateway](openshellgateway.md) - gateway CRD reference
+- [OpenShellProvider](openshellprovider.md) - provider CRD reference
+- [OpenShellPolicy](openshellpolicy.md) - policy CRD reference

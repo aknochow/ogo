@@ -89,4 +89,4 @@ This requires the sandbox policy to allow `api.anthropic.com` egress.
 
 - [Provider concept](../concepts/provider.md)
 - [Policy concept](../concepts/policy.md)
-- [Vertex AI example](vertex-ai.md) — for Claude via Google Vertex
+- [Vertex AI example](vertex-ai.md) - for Claude via Google Vertex

@@ -38,3 +38,4 @@ index.Dockerfile*
 *.pem
 *.key
 kubeconfig
+.claude/

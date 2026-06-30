@@ -8,7 +8,7 @@ tags: [claude, vertex, gcp, inference]
 # Claude Code with Vertex AI
 
 This example configures OGO to run Claude Code in sandboxes using Google
-Vertex AI for inference. The gateway manages GCP credential refresh — no
+Vertex AI for inference. The gateway manages GCP credential refresh - no
 `gcloud` CLI needed in sandboxes.
 
 ## 1. Create a GCP service account
@@ -104,4 +104,4 @@ claude
 ## See also
 
 - [Provider concept](../concepts/provider.md)
-- [Anthropic example](claude-code.md) — for direct Anthropic API access
+- [Anthropic example](claude-code.md) - for direct Anthropic API access

@@ -9,7 +9,7 @@ tags: [authentication, openshift]
 
 OGO includes an auth-bridge sidecar that translates OpenShift OAuth tokens
 into standard OIDC JWTs. This lets users log in to the OpenShell gateway
-with their OpenShift credentials — no external identity provider needed.
+with their OpenShift credentials - no external identity provider needed.
 
 ## How it works
 
@@ -38,7 +38,7 @@ spec:
   auth:
     openshift:
       enabled: true              # default on OpenShift, false on vanilla K8s
-      userGroup: openshell-users  # required — only members can authenticate
+      userGroup: openshell-users  # required - only members can authenticate
       adminGroup: openshell-admins # OpenShift group for admin role
       tokenTTL: "8h"             # JWT lifetime
 ```
