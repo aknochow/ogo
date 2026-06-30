@@ -82,6 +82,15 @@ spec:
                           OIDC tokens are valid.
                         pattern: ^[0-9]+(h|m|s)$
                         type: string
+                      userGroup:
+                        description: |-
+                          UserGroup is the OpenShift group required for gateway access via SSO.
+                          Only members of this group can authenticate. Users not in this group
+                          are rejected with 403 at login. Does not affect mTLS access.
+                        minLength: 1
+                        type: string
+                    required:
+                    - userGroup
                     type: object
                 type: object
               database:

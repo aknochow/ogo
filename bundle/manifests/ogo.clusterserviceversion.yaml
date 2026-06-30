@@ -14,7 +14,8 @@ metadata:
             "auth": {
               "openshift": {
                 "adminGroup": "openshell-admins",
-                "tokenTTL": "8h"
+                "tokenTTL": "8h",
+                "userGroup": "openshell-users"
               }
             },
             "database": {
@@ -129,7 +130,7 @@ metadata:
         }
       ]
     capabilities: Full Lifecycle
-    createdAt: "2026-06-29T21:23:47Z"
+    createdAt: "2026-06-30T13:54:40Z"
     operators.operatorframework.io/builder: operator-sdk-v1.42.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: ogo.v0.1.0
@@ -415,7 +416,7 @@ spec:
                 - --health-probe-bind-address=:8081
                 command:
                 - /manager
-                image: quay.io/aknochow/ogo:v0.1.0
+                image: quay.io/aknochow/ogo:0.1.0-20260630094427
                 livenessProbe:
                   httpGet:
                     path: /healthz
