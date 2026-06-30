@@ -37,9 +37,55 @@ Auth-bridge is enabled by default on OpenShift. Control it via the CR:
 spec:
   auth:
     openshift:
-      enabled: true         # default on OpenShift, false on vanilla K8s
-      adminGroup: my-admins  # OpenShift group for admin role
-      tokenTTL: "8h"        # JWT lifetime
+      enabled: true              # default on OpenShift, false on vanilla K8s
+      userGroup: openshell-users  # required — only members can authenticate
+      adminGroup: openshell-admins # OpenShift group for admin role
+      tokenTTL: "8h"             # JWT lifetime
+```
+
+## User group (required)
+
+The `userGroup` field specifies the OpenShift group required for SSO access.
+Only members of this group can authenticate via the browser login flow.
+Users not in the group are rejected with a 403 error at login.
+
+Set up the group and add users:
+
+```bash
+oc adm groups new openshell-users
+oc adm groups add-users openshell-users alice bob
+```
+
+This check does not affect mTLS authentication (used by CI/automation)
+or the internal sandbox bootstrap (K8s ServiceAccount tokens).
+
+## Troubleshooting
+
+### "access denied: you are not a member of the required OpenShift group"
+
+Your OpenShift user is not in the group specified by `spec.auth.openshift.userGroup`.
+Ask your cluster admin to add you:
+
+```bash
+oc adm groups add-users <group-name> <your-username>
+```
+
+Check your current groups:
+
+```bash
+oc get users <your-username> -o jsonpath='{.groups}'
+```
+
+### "authentication failed" after gateway restart
+
+The OAuthClient secret may be out of sync. The admin should delete both
+and let the operator recreate them:
+
+```bash
+oc delete secret openshell-oauth-client -n ogo
+oc delete oauthclient openshell
+# Wait 60s for the operator to reconcile, then restart the gateway pod
+oc delete pod -n ogo -l app.kubernetes.io/name=openshell
 ```
 
 ## Token lifetime
