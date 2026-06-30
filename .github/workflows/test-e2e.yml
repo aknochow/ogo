@@ -22,8 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  REGISTRY: quay.io
-  IMG: quay.io/aknochow/ogo:ci-${{ github.sha }}
+  IMG: quay.io/aknochow/ogo:e2e-test
 
 jobs:
   test-e2e:
@@ -48,12 +47,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build and push operator image
-        run: |
-          echo "${{ secrets.QUAY_PASSWORD }}" | \
-            docker login quay.io -u "${{ secrets.QUAY_USERNAME }}" --password-stdin
-          docker build -f Containerfile -t ${{ env.IMG }} .
-          docker push ${{ env.IMG }}
+      - name: Build operator image
+        run: docker build -f Containerfile -t ${{ env.IMG }} .
 
       - name: Install MINC
         run: |
@@ -84,6 +79,13 @@ jobs:
           echo "Waiting for system pods..."
           kubectl get pods -A
           echo "Cluster is ready"
+
+      - name: Load image into MINC
+        run: |
+          docker save ${{ env.IMG }} -o /tmp/ogo-image.tar
+          sudo podman cp /tmp/ogo-image.tar microshift:/tmp/ogo-image.tar
+          sudo podman exec microshift podman load -i /tmp/ogo-image.tar
+          rm -f /tmp/ogo-image.tar
 
       - name: Deploy operator
         run: |
