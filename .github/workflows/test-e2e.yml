@@ -1,26 +1,108 @@
 name: E2E Tests
 
-# E2E tests require an OpenShift cluster (CRC or full cluster).
-# This workflow is disabled until CI infrastructure is set up.
-# Run manually: make test-e2e against a cluster with KUBECONFIG set.
-
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-e2e:
-    name: Run on OpenShift
+    name: E2E on MINC
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      KUBECONFIG: /home/runner/.kube/config
+      IMG: quay.io/aknochow/ogo:e2e-test
+
     steps:
-      - name: Clone the code
+      - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo docker image prune -af
+          df -h
+
+      - name: Install MINC
+        run: |
+          curl -LsSf -o /tmp/minc \
+            https://github.com/minc-org/minc/releases/latest/download/minc_linux_amd64
+          chmod +x /tmp/minc
+          sudo mv /tmp/minc /usr/local/bin/minc
+          minc version
+
+      - name: Create MINC cluster
+        run: |
+          sudo minc create
+          echo "Waiting for cluster to be ready..."
+          sudo minc status
+
+      - name: Setup kubeconfig
+        run: |
+          sudo minc generate-kubeconfig
+          mkdir -p "$HOME/.kube"
+          sudo cp /root/.kube/config "$HOME/.kube/config"
+          sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
+
+      - name: Wait for cluster ready
+        run: |
+          echo "Waiting for nodes..."
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+          echo "Waiting for system pods..."
+          kubectl get pods -A
+          echo "Cluster is ready"
 
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
 
-      - name: Running Test e2e
+      - name: Build operator image
         run: |
-          echo "E2E tests require an OpenShift cluster."
-          echo "Run manually: KUBECONFIG=~/.kube/config make test-e2e"
+          sudo podman build -f Containerfile -t ${{ env.IMG }} .
+
+      - name: Deploy operator
+        run: |
+          make deploy IMG=${{ env.IMG }} CONTAINER_TOOL=podman
+
+      - name: Wait for operator
+        run: |
+          kubectl wait --for=condition=Available deployment/ogo-controller-manager \
+            -n ogo-system --timeout=120s
+          kubectl get pods -n ogo-system
+
+      - name: Run e2e tests
+        run: |
+          CERT_MANAGER_INSTALL_SKIP=true \
+            go test ./test/e2e/ -v -ginkgo.v -timeout 10m
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== Operator Logs ==="
+          kubectl logs -n ogo-system -l control-plane=controller-manager \
+            -c manager --tail=100 2>/dev/null || true
+
+          echo ""
+          echo "=== Events ==="
+          kubectl get events -n ogo-system --sort-by='.lastTimestamp' 2>/dev/null \
+            | tail -30 || true
+
+          echo ""
+          echo "=== All Pods ==="
+          kubectl get pods -A 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: sudo minc delete || true

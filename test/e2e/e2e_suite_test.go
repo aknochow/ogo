@@ -39,7 +39,7 @@ var (
 
 	// projectImage is the name of the image which will be built and loaded
 	// with the code source changes to be tested.
-	projectImage = "quay.io/aknochow/ogo:v0.1.0"
+	projectImage = envOrDefault("IMG", "quay.io/aknochow/ogo:v0.1.0")
 )
 
 // TestE2E runs the end-to-end (e2e) test suite for the project.
@@ -79,3 +79,10 @@ var _ = AfterSuite(func() {
 		utils.UninstallCertManager()
 	}
 })
+
+func envOrDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
