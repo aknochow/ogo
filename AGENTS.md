@@ -52,6 +52,21 @@ Envoy Gateway ingress, and provides an auth-bridge for OpenShift SSO login.
 - `internal/pki/pki.go` - TLS and JWT key generation
 - `internal/openshift/detect.go` - OpenShift and Gateway API detection
 
+## Public Repo - CRITICAL
+
+This is a **public repository**. Never include in commits, PR descriptions,
+issues, or any public-facing content:
+
+- Credentials, tokens, passwords, or API keys
+- Robot account names or service account identifiers
+- Internal hostnames, IPs, or infrastructure details
+- Registry auth configuration or secret names
+- Any information that could aid an attacker
+
+If a workflow requires secrets, reference them generically
+(e.g., "configure registry credentials in repo settings") without
+naming the specific account or value.
+
 ## Build & Test
 
 ```sh

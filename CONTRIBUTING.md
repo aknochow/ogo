@@ -41,3 +41,5 @@ Sign off all commits (`git commit -s`).
 2. Run `make build test lint` before submitting
 3. Keep PRs focused on one change
 4. Use conventional commit messages (changelogs are generated automatically)
+5. Never include credentials, token names, robot accounts, or internal
+   infrastructure details in PR descriptions, commits, or comments
