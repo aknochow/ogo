@@ -1,16 +1,17 @@
-name: Build Images
+name: Build Multi-Arch Images
 
 on:
-  push:
-    branches: [main]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - 'LICENSE'
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  workflow_call:
+    inputs:
+      tags:
+        description: 'Space-separated list of image tags to apply (e.g., "main" or "v0.1.0 latest")'
+        required: true
+        type: string
+    secrets:
+      QUAY_USERNAME:
+        required: true
+      QUAY_PASSWORD:
+        required: true
 
 env:
   REGISTRY: quay.io
@@ -112,15 +113,23 @@ jobs:
       - name: Create and push manifest
         working-directory: /tmp/digests
         run: |
+          TAG_ARGS=""
+          for tag in ${TAGS}; do
+            TAG_ARGS="${TAG_ARGS} -t ${IMAGE_BASE}/${IMAGE}:${tag}"
+          done
           docker buildx imagetools create \
-            -t "${IMAGE_BASE}/${IMAGE}:main" \
+            ${TAG_ARGS} \
             $(printf "${IMAGE_BASE}/${IMAGE}@sha256:%s " *)
         env:
           IMAGE_BASE: ${{ env.IMAGE_BASE }}
           IMAGE: ${{ matrix.image }}
+          TAGS: ${{ inputs.tags }}
 
       - name: Inspect manifest
-        run: docker buildx imagetools inspect "${IMAGE_BASE}/${IMAGE}:main"
+        run: |
+          FIRST_TAG=$(echo "${TAGS}" | awk '{print $1}')
+          docker buildx imagetools inspect "${IMAGE_BASE}/${IMAGE}:${FIRST_TAG}"
         env:
           IMAGE_BASE: ${{ env.IMAGE_BASE }}
           IMAGE: ${{ matrix.image }}
+          TAGS: ${{ inputs.tags }}
