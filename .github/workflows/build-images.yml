@@ -1,0 +1,135 @@
+name: Build Multi-Arch Images
+
+on:
+  workflow_call:
+    inputs:
+      tags:
+        description: 'Space-separated list of image tags to apply (e.g., "main" or "v0.1.0 latest")'
+        required: true
+        type: string
+    secrets:
+      QUAY_USERNAME:
+        required: true
+      QUAY_PASSWORD:
+        required: true
+
+env:
+  REGISTRY: quay.io
+  IMAGE_BASE: quay.io/aknochow
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ogo
+            containerfile: Containerfile
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - image: ogo
+            containerfile: Containerfile
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+          - image: ogo-auth-bridge
+            containerfile: Containerfile.auth-bridge
+            runner: ubuntu-latest
+            platform: linux/amd64
+          - image: ogo-auth-bridge
+            containerfile: Containerfile.auth-bridge
+            runner: ubuntu-24.04-arm
+            platform: linux/arm64
+
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Login to Quay.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.containerfile }}
+          platforms: ${{ matrix.platform }}
+          push: true
+          outputs: type=image,name=${{ env.IMAGE_BASE }}/${{ matrix.image }},push-by-digest=true,name-canonical=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          touch "/tmp/digests/${DIGEST#sha256:}"
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+
+      - name: Upload digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        image: [ogo, ogo-auth-bridge]
+
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: digest-${{ matrix.image }}-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Login to Quay.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Create and push manifest
+        working-directory: /tmp/digests
+        run: |
+          TAG_ARGS=""
+          for tag in ${TAGS}; do
+            TAG_ARGS="${TAG_ARGS} -t ${IMAGE_BASE}/${IMAGE}:${tag}"
+          done
+          docker buildx imagetools create \
+            ${TAG_ARGS} \
+            $(printf "${IMAGE_BASE}/${IMAGE}@sha256:%s " *)
+        env:
+          IMAGE_BASE: ${{ env.IMAGE_BASE }}
+          IMAGE: ${{ matrix.image }}
+          TAGS: ${{ inputs.tags }}
+
+      - name: Inspect manifest
+        run: |
+          FIRST_TAG=$(echo "${TAGS}" | awk '{print $1}')
+          docker buildx imagetools inspect "${IMAGE_BASE}/${IMAGE}:${FIRST_TAG}"
+        env:
+          IMAGE_BASE: ${{ env.IMAGE_BASE }}
+          IMAGE: ${{ matrix.image }}
+          TAGS: ${{ inputs.tags }}

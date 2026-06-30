@@ -1,26 +1,117 @@
 name: E2E Tests
 
-# E2E tests require an OpenShift cluster (CRC or full cluster).
-# This workflow is disabled until CI infrastructure is set up.
-# Run manually: make test-e2e against a cluster with KUBECONFIG set.
-
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'CHANGELOG.md'
+      - 'LICENSE'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMG: quay.io/aknochow/ogo:e2e-test
 
 jobs:
   test-e2e:
-    name: Run on OpenShift
+    name: E2E on MINC
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      KUBECONFIG: /home/runner/.kube/config
+
     steps:
-      - name: Clone the code
-        uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo docker image prune -af
+          df -h
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
 
-      - name: Running Test e2e
+      - name: Build operator image
+        run: docker build -f Containerfile -t ${{ env.IMG }} .
+
+      - name: Install MINC
+        env:
+          MINC_VERSION: v0.1.0
+          MINC_SHA256: 1acdf74755b1da09d8c773a4c0f7f651a1bbca9e6263c533ab11fe029371bb77
         run: |
-          echo "E2E tests require an OpenShift cluster."
-          echo "Run manually: KUBECONFIG=~/.kube/config make test-e2e"
+          curl -LsSf -o /tmp/minc \
+            "https://github.com/minc-org/minc/releases/download/${MINC_VERSION}/minc_linux_amd64"
+          echo "${MINC_SHA256}  /tmp/minc" | sha256sum -c -
+          chmod +x /tmp/minc
+          sudo mv /tmp/minc /usr/local/bin/minc
+          minc version
+
+      - name: Create MINC cluster
+        run: |
+          sudo minc create
+          echo "Waiting for cluster to be ready..."
+          sudo minc status
+
+      - name: Setup kubeconfig
+        run: |
+          sudo minc generate-kubeconfig
+          mkdir -p "$HOME/.kube"
+          sudo cp /root/.kube/config "$HOME/.kube/config"
+          sudo chown "$(id -u):$(id -g)" "$HOME/.kube/config"
+
+      - name: Wait for cluster ready
+        run: |
+          echo "Waiting for nodes..."
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+          echo "Waiting for system pods..."
+          kubectl get pods -A
+          echo "Cluster is ready"
+
+      - name: Load image into MINC
+        run: |
+          docker save ${{ env.IMG }} -o /tmp/ogo-image.tar
+          sudo podman cp /tmp/ogo-image.tar microshift:/tmp/ogo-image.tar
+          sudo podman exec microshift podman load -i /tmp/ogo-image.tar
+          rm -f /tmp/ogo-image.tar
+
+      - name: Run e2e tests
+        run: |
+          SKIP_BUILD=true CERT_MANAGER_INSTALL_SKIP=true IMG=${{ env.IMG }} \
+            go test ./test/e2e/ -v -ginkgo.v -timeout 10m
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== Operator Logs ==="
+          kubectl logs -n ogo -l control-plane=controller-manager \
+            -c manager --tail=100 2>/dev/null || true
+
+          echo ""
+          echo "=== Events ==="
+          kubectl get events -n ogo --sort-by='.lastTimestamp' 2>/dev/null \
+            | tail -30 || true
+
+          echo ""
+          echo "=== All Pods ==="
+          kubectl get pods -A 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: sudo minc delete || true
