@@ -16,6 +16,7 @@ on:
 env:
   REGISTRY: quay.io
   IMAGE_BASE: quay.io/aknochow
+  GHCR_BASE: ghcr.io/aknochow
 
 jobs:
   build:
@@ -131,5 +132,44 @@ jobs:
           docker buildx imagetools inspect "${IMAGE_BASE}/${IMAGE}:${FIRST_TAG}"
         env:
           IMAGE_BASE: ${{ env.IMAGE_BASE }}
+          IMAGE: ${{ matrix.image }}
+          TAGS: ${{ inputs.tags }}
+
+  mirror:
+    needs: manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: [ogo, ogo-auth-bridge]
+
+    steps:
+      - name: Login to Quay.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Login to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Mirror to GHCR
+        run: |
+          for tag in ${TAGS}; do
+            echo "Mirroring ${IMAGE}:${tag} → ghcr.io"
+            skopeo copy --all \
+              "docker://${QUAY_BASE}/${IMAGE}:${tag}" \
+              "docker://${GHCR_BASE}/${IMAGE}:${tag}"
+          done
+        env:
+          QUAY_BASE: ${{ env.IMAGE_BASE }}
+          GHCR_BASE: ${{ env.GHCR_BASE }}
           IMAGE: ${{ matrix.image }}
           TAGS: ${{ inputs.tags }}
