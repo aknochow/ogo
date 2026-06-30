@@ -30,7 +30,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install markdown tomli pygments
+        run: pip install markdown==3.7 tomli==2.2.1 pygments==2.19.1
 
       - name: Build docs
         run: python3 scripts/ogo-docs.py

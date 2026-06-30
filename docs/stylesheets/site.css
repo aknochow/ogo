@@ -5,7 +5,7 @@
 body {
   background-color: #1b1d21;
   color: #e0e0e0;
-  font-family: "RedHatText", "Helvetica Neue", Arial, sans-serif;
+  font-family: "Red Hat Text", "Helvetica Neue", Arial, sans-serif;
   line-height: 1.6;
 }
 
@@ -203,7 +203,7 @@ details[open] > summary .pf-v6-c-nav__toggle-icon {
   padding: 0.15em 0.4em;
   border-radius: 3px;
   font-size: 0.875em;
-  font-family: "RedHatMono", "Fira Code", "Consolas", monospace;
+  font-family: "Red Hat Mono", "Fira Code", "Consolas", monospace;
 }
 
 .pf-v6-c-content pre {

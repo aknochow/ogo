@@ -296,48 +296,6 @@ button) {
     opacity: 0;
   }
 }
-@font-face {
-  font-family: "Red Hat Text";
-  font-style: normal;
-  font-weight: 400 500;
-  src: url("./assets/fonts/RedHatText/RedHatTextVF.woff2") format("woff2-variations");
-  font-display: fallback;
-}
-@font-face {
-  font-family: "Red Hat Text";
-  font-style: italic;
-  font-weight: 400 500;
-  src: url("./assets/fonts/RedHatText/RedHatTextVF-Italic.woff2") format("woff2-variations");
-  font-display: fallback;
-}
-@font-face {
-  font-family: "Red Hat Display";
-  font-style: normal;
-  font-weight: 400 700;
-  src: url("./assets/fonts/RedHatDisplay/RedHatDisplayVF.woff2") format("woff2-variations");
-  font-display: fallback;
-}
-@font-face {
-  font-family: "Red Hat Display";
-  font-style: italic;
-  font-weight: 400 700;
-  src: url("./assets/fonts/RedHatDisplay/RedHatDisplayVF-Italic.woff2") format("woff2-variations");
-  font-display: fallback;
-}
-@font-face {
-  font-family: "Red Hat Mono";
-  font-style: normal;
-  font-weight: 400;
-  src: url("./assets/fonts/RedHatMono/RedHatMonoVF.woff2") format("woff2-variations");
-  font-display: fallback;
-}
-@font-face {
-  font-family: "Red Hat Mono";
-  font-style: italic;
-  font-weight: 400;
-  src: url("./assets/fonts/RedHatMono/RedHatMonoVF-Italic.woff2") format("woff2-variations");
-  font-display: fallback;
-}
 .fa-lg {
   font-size: 1.3333333333em;
   line-height: 0.75em;
@@ -546,12 +504,6 @@ button) {
   width: auto;
 }
 
-@font-face {
-  font-family: "Font Awesome 5 Free";
-  font-style: normal;
-  font-weight: 900;
-  src: url("./assets/fonts/webfonts/fa-solid-900.woff2") format("woff2");
-}
 .fa,
 .fas {
   font-family: "Font Awesome 5 Free";
@@ -5893,10 +5845,6 @@ button) {
   line-height: 1;
 }
 
-@font-face {
-  font-family: "pf-v6-pficon";
-  src: url("./assets/pficon/pf-v6-pficon.woff2") format("woff2");
-}
 .pf-v6-pficon-zone:before, .pf-v6-pficon-warning-triangle:before, .pf-v6-pficon-volume:before, .pf-v6-pficon-virtual-machine:before, .pf-v6-pficon-users:before, .pf-v6-pficon-user:before, .pf-v6-pficon-unplugged:before, .pf-v6-pficon-unlocked:before, .pf-v6-pficon-unknown:before, .pf-v6-pficon-trend-up:before, .pf-v6-pficon-trend-down:before, .pf-v6-pficon-treeview:before, .pf-v6-pficon-topology:before, .pf-v6-pficon-thumb-tack:before, .pf-v6-pficon-tenant:before, .pf-v6-pficon-task:before, .pf-v6-pficon-storage-domain:before, .pf-v6-pficon-spinner2:before, .pf-v6-pficon-spinner:before, .pf-v6-pficon-severity-undefined:before, .pf-v6-pficon-severity-none:before, .pf-v6-pficon-severity-moderate:before, .pf-v6-pficon-severity-minor:before, .pf-v6-pficon-severity-important:before, .pf-v6-pficon-severity-critical:before, .pf-v6-pficon-services:before, .pf-v6-pficon-service:before, .pf-v6-pficon-service-catalog:before, .pf-v6-pficon-server:before, .pf-v6-pficon-server-group:before, .pf-v6-pficon-security:before, .pf-v6-pficon-screen:before, .pf-v6-pficon-save:before, .pf-v6-pficon-running:before, .pf-v6-pficon-resources-full:before, .pf-v6-pficon-resources-empty:before, .pf-v6-pficon-resources-almost-full:before, .pf-v6-pficon-resources-almost-empty:before, .pf-v6-pficon-resource-pool:before, .pf-v6-pficon-repository:before, .pf-v6-pficon-replicator:before, .pf-v6-pficon-remove2:before, .pf-v6-pficon-registry:before, .pf-v6-pficon-regions:before, .pf-v6-pficon-rebooting:before, .pf-v6-pficon-rebalance:before, .pf-v6-pficon-project:before, .pf-v6-pficon-process-automation:before, .pf-v6-pficon-private:before, .pf-v6-pficon-print:before, .pf-v6-pficon-port:before, .pf-v6-pficon-plugged:before, .pf-v6-pficon-pficon-vcenter:before, .pf-v6-pficon-pficon-template:before, .pf-v6-pficon-pficon-sort-common-desc:before, .pf-v6-pficon-pficon-sort-common-asc:before, .pf-v6-pficon-pficon-satellite:before, .pf-v6-pficon-pficon-network-range:before, .pf-v6-pficon-pficon-history:before, .pf-v6-pficon-pficon-dragdrop:before, .pf-v6-pficon-pending:before, .pf-v6-pficon-paused:before, .pf-v6-pficon-panel-open:before, .pf-v6-pficon-panel-close:before, .pf-v6-pficon-package:before, .pf-v6-pficon-os-image:before, .pf-v6-pficon-orders:before, .pf-v6-pficon-optimize:before, .pf-v6-pficon-openstack:before, .pf-v6-pficon-openshift:before, .pf-v6-pficon-open-drawer-right:before, .pf-v6-pficon-on:before, .pf-v6-pficon-on-running:before, .pf-v6-pficon-ok:before, .pf-v6-pficon-off:before, .pf-v6-pficon-not-started:before, .pf-v6-pficon-new-process:before, .pf-v6-pficon-network:before, .pf-v6-pficon-namespaces:before, .pf-v6-pficon-multicluster:before, .pf-v6-pficon-monitoring:before, .pf-v6-pficon-module:before, .pf-v6-pficon-migration:before, .pf-v6-pficon-middleware:before, .pf-v6-pficon-messages:before, .pf-v6-pficon-memory:before, .pf-v6-pficon-maintenance:before, .pf-v6-pficon-locked:before, .pf-v6-pficon-key:before, .pf-v6-pficon-integration:before, .pf-v6-pficon-infrastructure:before, .pf-v6-pficon-info:before, .pf-v6-pficon-in-progress:before, .pf-v6-pficon-import:before, .pf-v6-pficon-home:before, .pf-v6-pficon-history:before, .pf-v6-pficon-help:before, .pf-v6-pficon-globe-route:before, .pf-v6-pficon-folder-open:before, .pf-v6-pficon-folder-close:before, .pf-v6-pficon-flavor:before, .pf-v6-pficon-filter:before, .pf-v6-pficon-export:before, .pf-v6-pficon-error-circle-o:before, .pf-v6-pficon-equalizer:before, .pf-v6-pficon-enterprise:before, .pf-v6-pficon-enhancement:before, .pf-v6-pficon-edit:before, .pf-v6-pficon-domain:before, .pf-v6-pficon-disconnected:before, .pf-v6-pficon-degraded:before, .pf-v6-pficon-data-source:before, .pf-v6-pficon-data-sink:before, .pf-v6-pficon-data-processor:before, .pf-v6-pficon-critical-risk:before, .pf-v6-pficon-cpu:before, .pf-v6-pficon-container-node:before, .pf-v6-pficon-connected:before, .pf-v6-pficon-cluster:before, .pf-v6-pficon-cloud-tenant:before, .pf-v6-pficon-cloud-security:before, .pf-v6-pficon-close:before, .pf-v6-pficon-chat:before, .pf-v6-pficon-catalog:before, .pf-v6-pficon-bundle:before, .pf-v6-pficon-builder-image:before, .pf-v6-pficon-build:before, .pf-v6-pficon-blueprint:before, .pf-v6-pficon-bell:before, .pf-v6-pficon-automation:before, .pf-v6-pficon-attention-bell:before, .pf-v6-pficon-asleep:before, .pf-v6-pficon-arrow:before, .pf-v6-pficon-applications:before, .pf-v6-pficon-ansible-tower:before, .pf-v6-pficon-add-circle-o:before {
   font-family: "pf-v6-pficon";
   -webkit-font-smoothing: antialiased;

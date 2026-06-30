@@ -2,14 +2,15 @@
 """OGO docs toolchain — build, serve, lint, search.
 
 Usage:
-    python3 includes/ogo-docs.py              # build site
-    python3 includes/ogo-docs.py serve [port] # build and serve locally
-    python3 includes/ogo-docs.py lint         # validate frontmatter, nav, links
-    python3 includes/ogo-docs.py search QUERY # search docs by tags and descriptions
-    python3 includes/ogo-docs.py init PATH    # scaffold a new doc with frontmatter
+    python3 scripts/ogo-docs.py              # build site
+    python3 scripts/ogo-docs.py serve [port] # build and serve locally
+    python3 scripts/ogo-docs.py lint         # validate frontmatter, nav, links
+    python3 scripts/ogo-docs.py search QUERY # search docs by tags and descriptions
+    python3 scripts/ogo-docs.py init PATH    # scaffold a new doc with frontmatter
 """
 
 import datetime
+import html as html_module
 import os
 import posixpath
 import re
@@ -22,7 +23,10 @@ import tomli
 DOCS_DIR = "docs"
 OUT_DIR = "public"
 CONFIG_FILE = "docs.toml"
-BASE_PATH = os.environ.get("DOCS_BASE_PATH", "/ogo")
+_raw_base = os.environ.get("DOCS_BASE_PATH", "/ogo")
+if not re.match(r'^(/[A-Za-z0-9._~:/?#@!$&()*+,;=\-]*)?$', _raw_base):
+    sys.exit(f"Invalid DOCS_BASE_PATH: {_raw_base!r}")
+BASE_PATH = _raw_base.rstrip("/")
 
 
 def parse_frontmatter(text):
@@ -124,6 +128,9 @@ TEMPLATE = """\
   <title>{tab_title}</title>
   <meta name="description" content="{description}">
   <link rel="icon" href="{base_path}/favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Red+Hat+Text:ital,wght@0,300..700;1,300..700&family=Red+Hat+Mono:wght@300..700&display=swap">
   <link rel="stylesheet" href="{base_path}/stylesheets/patternfly-base.css">
   <link rel="stylesheet" href="{base_path}/stylesheets/site.css">
 </head>
@@ -206,12 +213,12 @@ def build_page(md_rel, nav, md_converter):
     sidebar = build_sidebar(nav, md_rel)
 
     slug = md_to_slug(md_rel)
-    tab_title = "OGO" if not slug else f"{title} · OGO"
+    tab_title = "OGO" if not slug else f"{html_module.escape(title)} · OGO"
 
     html = TEMPLATE.format(
         base_path=BASE_PATH,
         tab_title=tab_title,
-        description=description,
+        description=html_module.escape(description),
         sidebar=sidebar,
         content=content,
         copy_script=COPY_SCRIPT,
