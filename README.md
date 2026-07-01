@@ -6,7 +6,7 @@ description: OpenShell Gateway Operator - deploy and manage OpenShell on OpenShi
 
 # OGO - OpenShell Gateway Operator
 
-[![Docs](https://img.shields.io/badge/docs-online-blue?logo=readthedocs&logoColor=white)](https://aknochow.github.io/ogo/) [![CI](https://github.com/aknochow/ogo/actions/workflows/ci.yml/badge.svg)](https://github.com/aknochow/ogo/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Apache%202.0-green)](https://github.com/aknochow/ogo/blob/main/LICENSE) [![Go](https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white)](https://go.dev/doc/go1.24)
+[![Version](https://img.shields.io/badge/version-alpha-orange)](https://github.com/aknochow/ogo/releases) [![Docs](https://img.shields.io/badge/docs-online-blue?logo=readthedocs&logoColor=white)](https://aknochow.github.io/ogo/) [![GitHub](https://img.shields.io/github/checks-status/aknochow/ogo/main?label=aknochow%2Fogo&logo=github&logoColor=white&labelColor=181717)](https://github.com/aknochow/ogo) [![License](https://img.shields.io/badge/license-Apache%202.0-green)](https://github.com/aknochow/ogo/blob/main/LICENSE) [![Go](https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white)](https://go.dev/doc/go1.24) [![OpenShell](https://img.shields.io/badge/OpenShell-v0.0.74-76b900?logo=nvidia&logoColor=white)](https://github.com/NVIDIA/OpenShell/releases)
 
 > **Alpha software.** OGO and [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell)
 > are both in active development. APIs, CRDs, and behavior may change without
@@ -14,7 +14,8 @@ description: OpenShell Gateway Operator - deploy and manage OpenShell on OpenShi
 
 OGO is an OpenShift operator that deploys and manages NVIDIA OpenShell
 gateway instances. It handles TLS, authentication, ingress, and sandbox
-lifecycle so you can run AI coding agents in isolated cloud sandboxes.
+lifecycle so you can run AI coding agents in isolated sandboxes on any
+OpenShift cluster — cloud, on-prem, or local (including [MINC](https://github.com/openshift/microshift)).
 
 ## Why OpenShift?
 
