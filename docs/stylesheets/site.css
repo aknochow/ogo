@@ -1,0 +1,299 @@
+/* OGO docs — PatternFly 6 dark theme */
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background-color: #1b1d21;
+  color: #e0e0e0;
+  font-family: "Red Hat Text", "Helvetica Neue", Arial, sans-serif;
+  line-height: 1.6;
+}
+
+/* ── Header ── */
+.site-header {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 52px;
+  background-color: #151515;
+  border-bottom: 1px solid #3c3f42;
+  display: flex;
+  align-items: center;
+  padding: 0 1.5rem;
+  z-index: 300;
+}
+
+.site-header__brand {
+  color: #73bcf7;
+  font-size: 1.25rem;
+  font-weight: 700;
+  text-decoration: none;
+  letter-spacing: 0.5px;
+}
+
+.site-header__brand:hover {
+  color: #2b9af3;
+}
+
+.site-header__tagline {
+  margin-left: 1rem;
+  color: #6a6e73;
+  font-size: 0.85rem;
+  font-weight: 400;
+}
+
+/* ── Layout ── */
+.site-layout {
+  display: flex;
+  margin-top: 52px;
+  height: calc(100vh - 52px);
+  overflow: hidden;
+}
+
+/* ── Sidebar ── */
+.site-sidebar {
+  width: 280px;
+  min-width: 280px;
+  height: 100%;
+  overflow-y: auto;
+  background-color: #1b1d21;
+  border-right: 1px solid #3c3f42;
+  padding: 1rem 0.75rem;
+}
+
+/* ── Main content ── */
+.site-main {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  justify-content: center;
+  padding: 2rem 3rem;
+}
+
+.site-content {
+  max-width: 900px;
+  width: 100%;
+}
+
+/* ── PF6 Nav (expandable) ── */
+.pf-v6-c-nav__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.pf-v6-c-nav__item {
+  margin: 0;
+}
+
+.pf-v6-c-nav__item > details {
+  border: none;
+}
+
+.pf-v6-c-nav__item > details > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  color: #e0e0e0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.6rem 0.75rem;
+  border-radius: 6px;
+  list-style: none;
+  user-select: none;
+  transition: background-color 0.15s;
+}
+
+.pf-v6-c-nav__item > details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.pf-v6-c-nav__toggle-icon {
+  font-size: 0.65rem;
+  color: #6a6e73;
+  transition: transform 0.15s;
+}
+
+details[open] > summary .pf-v6-c-nav__toggle-icon {
+  transform: rotate(90deg);
+}
+
+.pf-v6-c-nav__item > details > summary:hover {
+  background-color: rgba(255, 255, 255, 0.04);
+}
+
+/* Subnav */
+.pf-v6-c-nav__subnav {
+  list-style: none;
+  padding: 0.15rem 0 0.35rem 0;
+  margin: 0;
+}
+
+.pf-v6-c-nav__subnav .pf-v6-c-nav__link {
+  display: block;
+  color: #d2d2d2;
+  text-decoration: none;
+  padding: 0.3rem 0.75rem 0.3rem 1.75rem;
+  font-size: 0.85rem;
+  border-radius: 6px;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.pf-v6-c-nav__subnav .pf-v6-c-nav__link:hover {
+  color: #73bcf7;
+  background-color: rgba(115, 188, 247, 0.08);
+}
+
+.pf-v6-c-nav__subnav .pf-v6-c-nav__link.pf-m-current {
+  color: #73bcf7;
+  background-color: rgba(115, 188, 247, 0.12);
+  font-weight: 600;
+  border-left: 3px solid #0066cc;
+  padding-left: calc(1.75rem - 3px);
+}
+
+/* ── Content typography ── */
+.pf-v6-c-content h1 {
+  color: #e0e0e0;
+  font-size: 2rem;
+  font-weight: 700;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #3c3f42;
+  padding-bottom: 0.5rem;
+}
+
+.pf-v6-c-content h2 {
+  color: #e0e0e0;
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-top: 2rem;
+  margin-bottom: 0.75rem;
+}
+
+.pf-v6-c-content h3 {
+  color: #d2d2d2;
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.pf-v6-c-content p { margin-bottom: 1rem; }
+
+.pf-v6-c-content ul,
+.pf-v6-c-content ol {
+  margin-bottom: 1rem;
+  padding-left: 1.5rem;
+}
+
+.pf-v6-c-content li { margin-bottom: 0.35rem; }
+
+/* Links */
+.pf-v6-c-content a { color: #73bcf7; text-decoration: none; }
+.pf-v6-c-content a:hover { color: #2b9af3; text-decoration: underline; }
+
+/* Code */
+.pf-v6-c-content code {
+  background-color: #292e34;
+  color: #73bcf7;
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+  font-size: 0.875em;
+  font-family: "Red Hat Mono", "Fira Code", "Consolas", monospace;
+}
+
+.pf-v6-c-content pre {
+  background-color: #292e34 !important;
+  border: 1px solid #3c3f42;
+  border-radius: 6px;
+  padding: 1rem;
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+
+.pf-v6-c-content pre code {
+  background: none;
+  color: #e0e0e0;
+  padding: 0;
+  font-size: 0.85em;
+}
+
+/* Copy button on code blocks */
+.copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  background-color: #3c3f42;
+  color: #d2d2d2;
+  border: 1px solid #6a6e73;
+  border-radius: 4px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+pre:hover .copy-btn { opacity: 1; }
+.copy-btn:hover { background-color: #4f5255; }
+
+/* Tables */
+.pf-v6-c-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+}
+
+.pf-v6-c-content th {
+  background-color: #292e34;
+  color: #e0e0e0;
+  font-weight: 600;
+  text-align: left;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 2px solid #3c3f42;
+}
+
+.pf-v6-c-content td {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid #3c3f42;
+}
+
+.pf-v6-c-content tr:hover {
+  background-color: rgba(115, 188, 247, 0.04);
+}
+
+/* Blockquotes */
+.pf-v6-c-content blockquote {
+  border-left: 3px solid #73bcf7;
+  padding: 0.5rem 1rem;
+  margin: 1rem 0;
+  color: #a0a0a0;
+  background-color: rgba(115, 188, 247, 0.05);
+  border-radius: 0 6px 6px 0;
+}
+
+.pf-v6-c-content hr {
+  border: none;
+  border-top: 1px solid #3c3f42;
+  margin: 2rem 0;
+}
+
+/* ── Responsive ── */
+@media (max-width: 768px) {
+  .site-sidebar {
+    position: static;
+    width: 100%;
+    height: auto;
+    border-right: none;
+    border-bottom: 1px solid #3c3f42;
+  }
+
+  .site-main {
+    margin-left: 0;
+    padding: 1.5rem 1rem;
+  }
+}

@@ -39,3 +39,4 @@ index.Dockerfile*
 *.key
 kubeconfig
 .claude/
+public/
