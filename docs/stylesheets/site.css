@@ -43,6 +43,18 @@ body {
   font-weight: 400;
 }
 
+.site-header__badges {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.site-header__badge img {
+  display: block;
+  height: 20px;
+}
+
 /* ── Layout ── */
 .site-layout {
   display: flex;

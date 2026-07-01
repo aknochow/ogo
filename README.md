@@ -6,6 +6,8 @@ description: OpenShell Gateway Operator - deploy and manage OpenShell on OpenShi
 
 # OGO - OpenShell Gateway Operator
 
+[![Docs](https://img.shields.io/badge/docs-online-blue?logo=readthedocs&logoColor=white)](https://aknochow.github.io/ogo/) [![CI](https://github.com/aknochow/ogo/actions/workflows/ci.yml/badge.svg)](https://github.com/aknochow/ogo/actions/workflows/ci.yml) [![License](https://img.shields.io/badge/license-Apache%202.0-green)](https://github.com/aknochow/ogo/blob/main/LICENSE) [![Go](https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white)](https://go.dev/doc/go1.24)
+
 > **Alpha software.** OGO and [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell)
 > are both in active development. APIs, CRDs, and behavior may change without
 > notice. This project is not intended for production use.
