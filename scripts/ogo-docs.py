@@ -94,23 +94,27 @@ def load_nav(config_path):
 
 
 def load_badges(config_path):
+    """Load badge configuration from docs.toml."""
     with open(config_path, "rb") as f:
         config = tomli.load(f)
     return config.get("project", {}).get("badges", [])
 
 
 def build_badge_html(badges):
+    """Generate HTML for the badge bar in the site header. Returns empty string if no badges."""
     if not badges:
         return ""
     html = '<span class="site-header__badges">'
     for b in badges:
-        label = html_module.escape(b.get("label", ""))
-        img = html_module.escape(b.get("img", ""))
-        url = html_module.escape(b.get("url", ""))
+        label = b.get("label", "")
+        img = b.get("img", "")
+        url = b.get("url", "")
+        if not (label and img and url):
+            continue
         html += (
-            f'<a href="{url}" class="site-header__badge" '
-            f'target="_blank" rel="noopener noreferrer" aria-label="{label}">'
-            f'<img src="{img}" alt="{label}"></a>'
+            f'<a href="{html_module.escape(url)}" class="site-header__badge" '
+            f'target="_blank" rel="noopener noreferrer" aria-label="{html_module.escape(label)}">'
+            f'<img src="{html_module.escape(img)}" alt="{html_module.escape(label)}"></a>'
         )
     html += "</span>"
     return html
@@ -470,7 +474,7 @@ TODO: Write documentation.
 
 
 def badges_markdown():
-    """Print badge markdown for pasting into README."""
+    """Print badge markdown for README — one line, space-separated, sourced from docs.toml."""
     badge_list = load_badges(CONFIG_FILE)
     if not badge_list:
         print("No badges configured in docs.toml")
@@ -480,6 +484,12 @@ def badges_markdown():
         label = b.get("label", "")
         img = b.get("img", "")
         url = b.get("url", "")
+        if not (label and img and url):
+            print(f"Warning: skipping incomplete badge: {b}", file=sys.stderr)
+            continue
+        label = label.replace("[", "\\[").replace("]", "\\]")
+        img = img.replace("(", "\\(").replace(")", "\\)")
+        url = url.replace("(", "\\(").replace(")", "\\)")
         parts.append(f"[![{label}]({img})]({url})")
     print(" ".join(parts))
 
