@@ -443,38 +443,68 @@ func (r *OpenShellGatewayReconciler) reconcileCertManagerCertificate(ctx context
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
 	err := r.Get(ctx, types.NamespacedName{Name: gw.Name + "-server-tls", Namespace: ns}, existing)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
 		_, discoveryErr := r.DiscoveryClient.ServerResourcesForGroupVersion("cert-manager.io/v1")
 		if discoveryErr != nil {
 			return fmt.Errorf("cert-manager CRDs not installed on cluster")
 		}
+
+		cert := &unstructured.Unstructured{}
+		cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+		cert.SetName(gw.Name + "-server-tls")
+		cert.SetNamespace(ns)
+		cert.SetLabels(gatewayLabels(gw))
+		// Let's Encrypt issuers will reject internal SANs — use a self-signed
+		// ClusterIssuer if you need both external TLS and supervisor connectivity.
+		sans := computeServerSANs(gw)
+		dnsNames := []interface{}{}
+		for _, s := range sans {
+			if net.ParseIP(s) == nil {
+				dnsNames = append(dnsNames, s)
+			}
+		}
+		cert.Object["spec"] = map[string]interface{}{
+			"secretName": gw.Name + "-server-tls",
+			"issuerRef":  map[string]interface{}{"name": issuerName, "kind": issuerKind},
+			"dnsNames":   dnsNames,
+		}
+		if err := r.Create(ctx, cert); err != nil {
+			return fmt.Errorf("creating cert-manager Certificate: %w", err)
+		}
+	} else if err != nil {
 		return err
 	}
 
-	cert := &unstructured.Unstructured{}
-	cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
-	cert.SetName(gw.Name + "-server-tls")
-	cert.SetNamespace(ns)
-	cert.SetLabels(gatewayLabels(gw))
-	// Include both public and internal SANs for the server cert.
-	// Let's Encrypt issuers will reject internal names — use a self-signed
-	// ClusterIssuer if you need both external TLS and supervisor connectivity.
+	// cert-manager handles the server cert; generate self-signed client certs
+	// for internal mTLS (supervisor → gateway) independently.
+	// Use CreateOrUpdate with SAN hash tracking so the client cert is
+	// regenerated when the hostname changes.
+	clientSecretName := gw.Name + "-client-tls"
 	sans := computeServerSANs(gw)
-	dnsNames := []interface{}{}
-	for _, s := range sans {
-		if net.ParseIP(s) == nil {
-			dnsNames = append(dnsNames, s)
+	sansHash := pki.HashSANs(sans)
+
+	clientSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: clientSecretName, Namespace: ns}}
+	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, clientSecret, func() error {
+		if clientSecret.Annotations != nil && clientSecret.Annotations["ogo.aknochow.io/pki-sans-hash"] == sansHash {
+			return nil
 		}
+		bundle, err := pki.GeneratePKI(sans)
+		if err != nil {
+			return fmt.Errorf("generating client PKI: %w", err)
+		}
+		clientSecret.Labels = gatewayLabels(gw)
+		if clientSecret.Annotations == nil {
+			clientSecret.Annotations = map[string]string{}
+		}
+		clientSecret.Annotations["ogo.aknochow.io/pki-sans-hash"] = sansHash
+		clientSecret.Type = corev1.SecretTypeTLS
+		clientSecret.Data = map[string][]byte{"tls.crt": bundle.ClientCert, "tls.key": bundle.ClientKey, "ca.crt": bundle.CACert}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("reconciling client TLS secret: %w", err)
 	}
-	cert.Object["spec"] = map[string]interface{}{
-		"secretName": gw.Name + "-server-tls",
-		"issuerRef":  map[string]interface{}{"name": issuerName, "kind": issuerKind},
-		"dnsNames":   dnsNames,
-	}
-	return r.Create(ctx, cert)
+
+	return nil
 }
 
 func (r *OpenShellGatewayReconciler) reconcileSelfSignedTLS(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
