@@ -10,14 +10,19 @@ name = "patternfly-6-dark"
 # Badges — rendered in the docs site header and available as README markdown
 # via: python3 scripts/ogo-docs.py badges
 [[project.badges]]
+label = "Version"
+url   = "https://github.com/aknochow/ogo/releases"
+img   = "https://img.shields.io/badge/version-alpha-orange"
+
+[[project.badges]]
 label = "Docs"
 url   = "https://aknochow.github.io/ogo/"
 img   = "https://img.shields.io/badge/docs-online-blue?logo=readthedocs&logoColor=white"
 
 [[project.badges]]
-label = "CI"
-url   = "https://github.com/aknochow/ogo/actions/workflows/ci.yml"
-img   = "https://github.com/aknochow/ogo/actions/workflows/ci.yml/badge.svg"
+label = "GitHub"
+url   = "https://github.com/aknochow/ogo"
+img   = "https://img.shields.io/github/checks-status/aknochow/ogo/main?label=aknochow%2Fogo&logo=github&logoColor=white&labelColor=181717"
 
 [[project.badges]]
 label = "License"
@@ -28,6 +33,11 @@ img   = "https://img.shields.io/badge/license-Apache%202.0-green"
 label = "Go"
 url   = "https://go.dev/doc/go1.24"
 img   = "https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white"
+
+[[project.badges]]
+label = "OpenShell"
+url   = "https://github.com/NVIDIA/OpenShell/releases"
+img   = "https://img.shields.io/badge/OpenShell-v0.0.74-76b900?logo=nvidia&logoColor=white"
 
 # Navigation
 [[project.nav]]
