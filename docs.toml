@@ -7,6 +7,28 @@ site_dir = "public"
 [project.theme]
 name = "patternfly-6-dark"
 
+# Badges — rendered in the docs site header and available as README markdown
+# via: python3 scripts/ogo-docs.py badges
+[[project.badges]]
+label = "Docs"
+url   = "https://aknochow.github.io/ogo/"
+img   = "https://img.shields.io/badge/docs-online-blue?logo=readthedocs&logoColor=white"
+
+[[project.badges]]
+label = "CI"
+url   = "https://github.com/aknochow/ogo/actions/workflows/ci.yml"
+img   = "https://github.com/aknochow/ogo/actions/workflows/ci.yml/badge.svg"
+
+[[project.badges]]
+label = "License"
+url   = "https://github.com/aknochow/ogo/blob/main/LICENSE"
+img   = "https://img.shields.io/badge/license-Apache%202.0-green"
+
+[[project.badges]]
+label = "Go"
+url   = "https://go.dev/doc/go1.24"
+img   = "https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white"
+
 # Navigation
 [[project.nav]]
 "Overview" = [

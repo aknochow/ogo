@@ -7,6 +7,7 @@ Usage:
     python3 scripts/ogo-docs.py lint         # validate frontmatter, nav, links
     python3 scripts/ogo-docs.py search QUERY # search docs by tags and descriptions
     python3 scripts/ogo-docs.py init PATH    # scaffold a new doc with frontmatter
+    python3 scripts/ogo-docs.py badges       # print badge markdown for README
 """
 
 import datetime
@@ -92,6 +93,29 @@ def load_nav(config_path):
     return nav
 
 
+def load_badges(config_path):
+    with open(config_path, "rb") as f:
+        config = tomli.load(f)
+    return config.get("project", {}).get("badges", [])
+
+
+def build_badge_html(badges):
+    if not badges:
+        return ""
+    html = '<span class="site-header__badges">'
+    for b in badges:
+        label = html_module.escape(b.get("label", ""))
+        img = html_module.escape(b.get("img", ""))
+        url = html_module.escape(b.get("url", ""))
+        html += (
+            f'<a href="{url}" class="site-header__badge" '
+            f'target="_blank" rel="noopener noreferrer" aria-label="{label}">'
+            f'<img src="{img}" alt="{label}"></a>'
+        )
+    html += "</span>"
+    return html
+
+
 def build_sidebar(nav, current_file):
     html = '<nav class="pf-v6-c-nav" aria-label="Documentation">\n'
     html += '  <ul class="pf-v6-c-nav__list">\n'
@@ -138,6 +162,7 @@ TEMPLATE = """\
   <header class="site-header">
     <a href="{base_path}/" class="site-header__brand">OGO</a>
     <span class="site-header__tagline">OpenShell Gateway Operator</span>
+    {badges}
   </header>
 
   <div class="site-layout">
@@ -199,7 +224,7 @@ def rewrite_links(html, md_rel):
     return re.sub(r'href="([^"#:]+)\.md(#[^"]*)?"', replace, html)
 
 
-def build_page(md_rel, nav, md_converter):
+def build_page(md_rel, nav, badges_html, md_converter):
     """Build a single page. md_rel is path relative to DOCS_DIR."""
     with open(os.path.join(DOCS_DIR, md_rel)) as f:
         raw = f.read()
@@ -220,6 +245,7 @@ def build_page(md_rel, nav, md_converter):
         tab_title=tab_title,
         description=html_module.escape(description),
         sidebar=sidebar,
+        badges=badges_html,
         content=content,
         copy_script=COPY_SCRIPT,
     )
@@ -254,6 +280,7 @@ def main():
     os.makedirs(OUT_DIR, exist_ok=True)
 
     nav = load_nav(CONFIG_FILE)
+    badges_html = build_badge_html(load_badges(CONFIG_FILE))
 
     md = markdown.Markdown(
         extensions=["tables", "fenced_code", "codehilite", "toc"],
@@ -266,7 +293,7 @@ def main():
 
     md_files = collect_md_files()
     for md_rel in md_files:
-        build_page(md_rel, nav, md)
+        build_page(md_rel, nav, badges_html, md)
 
     favicon_src = os.path.join(DOCS_DIR, "favicon.svg")
     if os.path.exists(favicon_src):
@@ -442,6 +469,21 @@ TODO: Write documentation.
     print(f"Created {path} — update frontmatter and add to docs.toml nav")
 
 
+def badges_markdown():
+    """Print badge markdown for pasting into README."""
+    badge_list = load_badges(CONFIG_FILE)
+    if not badge_list:
+        print("No badges configured in docs.toml")
+        return
+    parts = []
+    for b in badge_list:
+        label = b.get("label", "")
+        img = b.get("img", "")
+        url = b.get("url", "")
+        parts.append(f"[![{label}]({img})]({url})")
+    print(" ".join(parts))
+
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "build"
 
@@ -453,6 +495,8 @@ if __name__ == "__main__":
         serve(port)
     elif cmd == "lint":
         lint()
+    elif cmd == "badges":
+        badges_markdown()
     elif cmd == "search":
         if len(sys.argv) < 3:
             print("Usage: ogo-docs.py search QUERY")
