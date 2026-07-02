@@ -22,7 +22,7 @@ img   = "https://img.shields.io/badge/docs-online-blue?logo=readthedocs&logoColo
 [[project.badges]]
 label = "GitHub"
 url   = "https://github.com/aknochow/ogo"
-img   = "https://img.shields.io/github/checks-status/aknochow/ogo/main?label=aknochow%2Fogo&logo=github&logoColor=white&labelColor=181717"
+img   = "https://img.shields.io/github/actions/workflow/status/aknochow/ogo/test.yml?branch=main&label=aknochow%2Fogo&logo=github&logoColor=white&labelColor=181717"
 
 [[project.badges]]
 label = "License"
