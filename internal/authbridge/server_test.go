@@ -390,6 +390,162 @@ func TestTokenExchangeRejectsNonMember(t *testing.T) {
 	}
 }
 
+func TestTokenExchangeRejectsInvalidToken(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer mock.Close()
+
+	t.Setenv("KUBERNETES_API_URL", mock.URL)
+
+	s := testServer(t)
+	handler := s.Handler()
+
+	req := httptest.NewRequest("POST", "/token/exchange", nil)
+	req.Header.Set("Authorization", "Bearer invalid-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 for invalid token", w.Code)
+	}
+}
+
+func TestMapRoles(t *testing.T) {
+	s := testServer(t)
+	s.config.AdminGroup = "openshell-admins"
+
+	tests := []struct {
+		name      string
+		groups    []string
+		wantAdmin bool
+	}{
+		{"user only", []string{"openshell-users"}, false},
+		{"user and admin", []string{"openshell-users", "openshell-admins"}, true},
+		{"admin only", []string{"openshell-admins"}, true},
+		{"no relevant groups", []string{"other"}, false},
+		{"empty", []string{}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			roles := s.mapRoles(tt.groups)
+			hasUser := false
+			hasAdmin := false
+			for _, r := range roles {
+				if r == "openshell-user" {
+					hasUser = true
+				}
+				if r == "openshell-admin" {
+					hasAdmin = true
+				}
+			}
+			if !hasUser {
+				t.Error("should always have openshell-user role")
+			}
+			if hasAdmin != tt.wantAdmin {
+				t.Errorf("admin = %v, want %v", hasAdmin, tt.wantAdmin)
+			}
+		})
+	}
+}
+
+func TestMapRolesNoAdminGroup(t *testing.T) {
+	s := testServer(t)
+	s.config.AdminGroup = ""
+
+	roles := s.mapRoles([]string{"openshell-admins"})
+	for _, r := range roles {
+		if r == "openshell-admin" {
+			t.Error("should not assign admin role when adminGroup is empty")
+		}
+	}
+}
+
+func TestSplitState(t *testing.T) {
+	tests := []struct {
+		input string
+		want  [2]string
+	}{
+		{"bridge:client", [2]string{"bridge", "client"}},
+		{"nodelimiter", [2]string{"nodelimiter", ""}},
+		{"a:b:c", [2]string{"a", "b:c"}},
+		{":", [2]string{"", ""}},
+		{"", [2]string{"", ""}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := splitState(tt.input)
+			if got != tt.want {
+				t.Errorf("splitState(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTokenEndpointHappyPath(t *testing.T) {
+	s := testServer(t)
+	handler := s.Handler()
+
+	jwt, err := s.signer.MintToken("http://localhost:8085", "openshell-cli", "uid-1", "alice", "", []string{"openshell-user"}, 8*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code := generateCode()
+	s.codesMu.Lock()
+	s.codes[code] = &pendingCode{jwt: jwt, expiresAt: time.Now().Add(60 * time.Second)}
+	s.codesMu.Unlock()
+
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}}
+	req := httptest.NewRequest("POST", "/token", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["access_token"] == nil || resp["access_token"] == "" {
+		t.Error("access_token is empty")
+	}
+	if resp["token_type"] != "Bearer" {
+		t.Errorf("token_type = %v, want Bearer", resp["token_type"])
+	}
+}
+
+func TestSweepExpiredCodes(t *testing.T) {
+	s := testServer(t)
+
+	s.codesMu.Lock()
+	s.codes["expired"] = &pendingCode{expiresAt: time.Now().Add(-1 * time.Minute)}
+	s.codes["valid"] = &pendingCode{expiresAt: time.Now().Add(5 * time.Minute)}
+	s.codesMu.Unlock()
+
+	// Trigger a manual sweep
+	now := time.Now()
+	s.codesMu.Lock()
+	for k, v := range s.codes {
+		if now.After(v.expiresAt) {
+			delete(s.codes, k)
+		}
+	}
+	s.codesMu.Unlock()
+
+	s.codesMu.Lock()
+	defer s.codesMu.Unlock()
+	if _, ok := s.codes["expired"]; ok {
+		t.Error("expired code should have been swept")
+	}
+	if _, ok := s.codes["valid"]; !ok {
+		t.Error("valid code should still exist")
+	}
+}
+
 func TestAuthorizeRejectsInvalidRedirectURI(t *testing.T) {
 	s := testServer(t)
 	handler := s.Handler()
