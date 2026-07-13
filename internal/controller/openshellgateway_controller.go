@@ -89,6 +89,7 @@ type OpenShellGatewayReconciler struct {
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=oauth.openshift.io,resources=oauthclients,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;grpcroutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=backendtrafficpolicies,verbs=get;list;watch;create;update;patch;delete
 
 func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -247,6 +248,13 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 			if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 				log.Error(err, "Failed to delete Gateway API resource", "kind", gvk.Kind)
 			}
+		}
+		btpObj := &unstructured.Unstructured{}
+		btpObj.SetGroupVersionKind(schema.GroupVersionKind{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Kind: "BackendTrafficPolicy"})
+		btpObj.SetName(gw.Name + "-timeout")
+		btpObj.SetNamespace(ns)
+		if err := r.Delete(ctx, btpObj); err != nil && !apierrors.IsNotFound(err) {
+			log.Error(err, "Failed to delete BackendTrafficPolicy")
 		}
 		svcList := &corev1.ServiceList{}
 		if err := r.List(ctx, svcList, client.MatchingLabels{
@@ -1082,6 +1090,37 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw
 		}
 	} else if err != nil {
 		return fmt.Errorf("getting GRPCRoute: %w", err)
+	}
+
+	// Disable Envoy's default 15-second stream timeout for long-lived gRPC
+	// streams (SSH relay, WatchSandbox). Without this, Envoy kills the
+	// connection and the CLI reports "missing grpc-status trailer".
+	btpGVK := schema.GroupVersionKind{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Kind: "BackendTrafficPolicy"}
+	existingBTP := &unstructured.Unstructured{}
+	existingBTP.SetGroupVersionKind(btpGVK)
+	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name + "-timeout", Namespace: ns}, existingBTP); apierrors.IsNotFound(err) {
+		btp := &unstructured.Unstructured{}
+		btp.SetGroupVersionKind(btpGVK)
+		btp.SetName(gw.Name + "-timeout")
+		btp.SetNamespace(ns)
+		btp.SetLabels(gatewayLabels(gw))
+		btp.Object["spec"] = map[string]interface{}{
+			"targetRefs": []interface{}{
+				map[string]interface{}{
+					"group": "gateway.networking.k8s.io",
+					"kind":  "GRPCRoute",
+					"name":  gw.Name,
+				},
+			},
+			"timeout": map[string]interface{}{
+				"http": map[string]interface{}{
+					"requestTimeout": "0s",
+				},
+			},
+		}
+		if createErr := r.Create(ctx, btp); createErr != nil {
+			logf.FromContext(ctx).Error(createErr, "Failed to create BackendTrafficPolicy (Envoy Gateway may not be installed)")
+		}
 	}
 
 	oldRoute := &unstructured.Unstructured{}
