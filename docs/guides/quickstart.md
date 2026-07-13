@@ -7,8 +7,7 @@ tags: [getting-started]
 
 # Quickstart
 
-Deploy OGO on an OpenShift cluster with PostgreSQL, OpenShift SSO, and the
-OpenShell gateway.
+Deploy OGO on an OpenShift cluster with PostgreSQL and the OpenShell gateway.
 
 ## Prerequisites
 
@@ -65,7 +64,8 @@ EOF
 ### 2. Install Envoy Gateway
 
 On OpenShift 4.22+, Gateway API CRDs are managed by the Ingress Operator.
-Use `--skip-crds` to avoid conflicts:
+Use `--skip-crds` to avoid conflicts. On 4.16-4.21, omit `--skip-crds`
+to let the Helm chart install the CRDs:
 
 ```bash
 helm install eg oci://docker.io/envoyproxy/gateway-helm \
@@ -144,7 +144,6 @@ spec:
   tls:
     enabled: false
     certManager:
-      enabled: true
       issuerName: letsencrypt
       issuerKind: ClusterIssuer
   route:
@@ -238,6 +237,8 @@ spec:
     enabled: true
   route:
     hostname: openshell.apps.your-cluster.example.com
+    gatewayAPI:
+      enabled: false
   auth:
     openshift:
       enabled: false
@@ -305,6 +306,7 @@ oc delete gatewayclass eg
 
 ## Next steps
 
+- [DevSpaces](devspaces.md) - create sandboxes from DevSpaces workspaces
 - [Envoy Gateway](envoy-gateway.md) - gRPC ingress architecture details
 - [OpenShift SSO](openshift-sso.md) - authentication and user groups
 - [Provider](../concepts/provider.md) - inject API keys into sandboxes
