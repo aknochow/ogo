@@ -34,14 +34,22 @@ is already authenticated to OpenShift in DevSpaces.
 - `openshell` CLI installed in the DevSpaces workspace
 - `jq` available in the workspace
 
-## Install the OpenShell CLI
+## Install the OpenShell CLI (if not in your workspace image)
 
-From a DevSpaces terminal:
+If your DevSpaces workspace image does not include the `openshell` CLI,
+install it manually:
 
 ```bash
 curl -LsSf https://github.com/NVIDIA/OpenShell/releases/latest/download/openshell-x86_64-unknown-linux-musl.tar.gz \
   | tar xz -C ~/.local/bin/
 openshell --version
+```
+
+To bake it into a custom workspace image, add to your Containerfile:
+
+```dockerfile
+RUN curl -LsSf https://github.com/NVIDIA/OpenShell/releases/latest/download/openshell-x86_64-unknown-linux-musl.tar.gz \
+  | tar xz -C /usr/local/bin/
 ```
 
 ## Same-cluster setup
