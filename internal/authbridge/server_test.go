@@ -305,7 +305,7 @@ func TestTokenExchangeRejectsMissingBearer(t *testing.T) {
 	}
 }
 
-func TestTokenExchangeRejectsEmptyBearer(t *testing.T) {
+func TestTokenExchangeRejectsNonBearerAuth(t *testing.T) {
 	s := testServer(t)
 	handler := s.Handler()
 

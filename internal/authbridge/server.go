@@ -118,7 +118,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"token_endpoint":                        s.config.ExternalIssuer + "/token",
 		"jwks_uri":                              base + "/jwks",
 		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code", "urn:ietf:params:oauth:grant-type:token-exchange"},
+		"grant_types_supported":                 []string{"authorization_code"},
 		"subject_types_supported":               []string{"public"},
 		"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
 		"scopes_supported":                      []string{"openid", "profile", "email"},
@@ -343,7 +343,7 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 
 	if !s.isAuthorized(userInfo.Name, userInfo.Groups) {
 		log.Printf("token exchange: user %s not in required group %q", userInfo.Name, s.config.UserGroup)
-		http.Error(w, fmt.Sprintf(`{"error":"user %q is not a member of group %q"}`, userInfo.Name, s.config.UserGroup), http.StatusForbidden)
+		http.Error(w, `{"error":"user is not a member of the required group"}`, http.StatusForbidden)
 		return
 	}
 
