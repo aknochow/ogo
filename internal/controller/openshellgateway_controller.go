@@ -1098,7 +1098,9 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw
 	btpGVK := schema.GroupVersionKind{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Kind: "BackendTrafficPolicy"}
 	existingBTP := &unstructured.Unstructured{}
 	existingBTP.SetGroupVersionKind(btpGVK)
-	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name + "-timeout", Namespace: ns}, existingBTP); apierrors.IsNotFound(err) {
+	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name + "-timeout", Namespace: ns}, existingBTP); err != nil && !apierrors.IsNotFound(err) {
+		logf.FromContext(ctx).Error(err, "Failed to check BackendTrafficPolicy")
+	} else if apierrors.IsNotFound(err) {
 		btp := &unstructured.Unstructured{}
 		btp.SetGroupVersionKind(btpGVK)
 		btp.SetName(gw.Name + "-timeout")
