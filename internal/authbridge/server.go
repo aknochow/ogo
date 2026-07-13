@@ -93,6 +93,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/authorize", s.handleAuthorize)
 	mux.HandleFunc("/callback", s.handleCallback)
 	mux.HandleFunc("/token", s.handleToken)
+	mux.HandleFunc("/token/exchange", s.handleTokenExchange)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprint(w, "ok")
@@ -117,7 +118,7 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"token_endpoint":                        s.config.ExternalIssuer + "/token",
 		"jwks_uri":                              base + "/jwks",
 		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code"},
+		"grant_types_supported":                 []string{"authorization_code", "urn:ietf:params:oauth:grant-type:token-exchange"},
 		"subject_types_supported":               []string{"public"},
 		"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
 		"scopes_supported":                      []string{"openid", "profile", "email"},
@@ -317,6 +318,62 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		"access_token": pending.jwt,
 		"token_type":   "Bearer",
 		"expires_in":   int(s.config.TokenTTL.Seconds()),
+	})
+}
+
+func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	auth := r.Header.Get("Authorization")
+	if !strings.HasPrefix(auth, "Bearer ") {
+		http.Error(w, `{"error":"missing Bearer token"}`, http.StatusUnauthorized)
+		return
+	}
+	ocpToken := strings.TrimPrefix(auth, "Bearer ")
+
+	userInfo, err := s.osc.GetUserInfo(r.Context(), ocpToken)
+	if err != nil {
+		log.Printf("token exchange: user info failed: %v", err)
+		http.Error(w, `{"error":"invalid OpenShift token"}`, http.StatusUnauthorized)
+		return
+	}
+
+	if !s.isAuthorized(userInfo.Name, userInfo.Groups) {
+		log.Printf("token exchange: user %s not in required group %q", userInfo.Name, s.config.UserGroup)
+		http.Error(w, fmt.Sprintf(`{"error":"user %q is not a member of group %q"}`, userInfo.Name, s.config.UserGroup), http.StatusForbidden)
+		return
+	}
+
+	roles := s.mapRoles(userInfo.Groups)
+
+	jwt, err := s.signer.MintToken(
+		s.config.Issuer,
+		s.config.Audience,
+		userInfo.UID,
+		userInfo.Name,
+		"",
+		roles,
+		s.config.TokenTTL,
+	)
+	if err != nil {
+		log.Printf("token exchange: JWT minting failed: %v", err)
+		http.Error(w, `{"error":"token generation failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	expiresAt := time.Now().Add(s.config.TokenTTL).Unix()
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"access_token": jwt,
+		"token_type":   "Bearer",
+		"expires_in":   int(s.config.TokenTTL.Seconds()),
+		"expires_at":   expiresAt,
+		"issuer":       s.config.ExternalIssuer,
+		"client_id":    s.config.Audience,
 	})
 }
 

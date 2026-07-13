@@ -280,6 +280,45 @@ func TestIsAuthorizedEmptyConfig(t *testing.T) {
 	}
 }
 
+func TestTokenExchangeRejectsGet(t *testing.T) {
+	s := testServer(t)
+	handler := s.Handler()
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest("GET", "/token/exchange", nil))
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want 405", w.Code)
+	}
+}
+
+func TestTokenExchangeRejectsMissingBearer(t *testing.T) {
+	s := testServer(t)
+	handler := s.Handler()
+
+	req := httptest.NewRequest("POST", "/token/exchange", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401", w.Code)
+	}
+}
+
+func TestTokenExchangeRejectsEmptyBearer(t *testing.T) {
+	s := testServer(t)
+	handler := s.Handler()
+
+	req := httptest.NewRequest("POST", "/token/exchange", nil)
+	req.Header.Set("Authorization", "Basic dGVzdDp0ZXN0")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want 401 for non-Bearer auth", w.Code)
+	}
+}
+
 func TestAuthorizeRejectsInvalidRedirectURI(t *testing.T) {
 	s := testServer(t)
 	handler := s.Handler()
