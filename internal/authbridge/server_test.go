@@ -319,6 +319,77 @@ func TestTokenExchangeRejectsEmptyBearer(t *testing.T) {
 	}
 }
 
+func TestTokenExchangeWithMockOpenShift(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/apis/user.openshift.io/v1/users/~" {
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer valid-ocp-token" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"name":"alice","uid":"uid-alice"},"groups":["openshell-users"]}`))
+			return
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer mock.Close()
+
+	t.Setenv("KUBERNETES_API_URL", mock.URL)
+
+	s := testServer(t)
+	handler := s.Handler()
+
+	req := httptest.NewRequest("POST", "/token/exchange", nil)
+	req.Header.Set("Authorization", "Bearer valid-ocp-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["access_token"] == nil || resp["access_token"] == "" {
+		t.Error("access_token is empty")
+	}
+	if resp["token_type"] != "Bearer" {
+		t.Errorf("token_type = %v, want Bearer", resp["token_type"])
+	}
+	if resp["expires_at"] == nil {
+		t.Error("expires_at is missing")
+	}
+}
+
+func TestTokenExchangeRejectsNonMember(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/apis/user.openshift.io/v1/users/~" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"name":"bob","uid":"uid-bob"},"groups":["other-group"]}`))
+			return
+		}
+		http.Error(w, "not found", http.StatusNotFound)
+	}))
+	defer mock.Close()
+
+	t.Setenv("KUBERNETES_API_URL", mock.URL)
+
+	s := testServer(t)
+	handler := s.Handler()
+
+	req := httptest.NewRequest("POST", "/token/exchange", nil)
+	req.Header.Set("Authorization", "Bearer some-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for non-member", w.Code)
+	}
+}
+
 func TestAuthorizeRejectsInvalidRedirectURI(t *testing.T) {
 	s := testServer(t)
 	handler := s.Handler()

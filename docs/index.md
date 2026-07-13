@@ -33,6 +33,7 @@ Step-by-step walkthroughs.
 - [Quickstart](guides/quickstart.md) - deploy OGO on OpenShift in 10 minutes
 - [Envoy Gateway](guides/envoy-gateway.md) - gRPC ingress with Let's Encrypt TLS
 - [OpenShift SSO](guides/openshift-sso.md) - "Log in with OpenShift" for the CLI
+- [DevSpaces](guides/devspaces.md) - create sandboxes from DevSpaces workspaces
 
 ## Reference
 
