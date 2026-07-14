@@ -63,20 +63,30 @@ EOF
 
 ### 2. Install Envoy Gateway
 
-On OpenShift 4.22+, Gateway API CRDs are managed by the Ingress Operator.
-Use `--skip-crds` to avoid conflicts. On 4.16-4.21, omit `--skip-crds`
-to let the Helm chart install the CRDs:
+The certgen pre-install hook runs as uid 65534, outside OpenShift's allowed
+UID range. Pre-create the namespace and service account, grant SCC, then
+install with the UID overridden:
 
 ```bash
+# 1. Pre-create namespace and certgen service account
+oc create namespace envoy-gateway-system
+oc create sa eg-gateway-helm-certgen -n envoy-gateway-system
+oc adm policy add-scc-to-user anyuid -z eg-gateway-helm-certgen -n envoy-gateway-system
+
+# 2. Install — override certgen UID so OpenShift assigns from the namespace range
 helm install eg oci://docker.io/envoyproxy/gateway-helm \
-  --version v1.3.2 -n envoy-gateway-system --create-namespace --skip-crds
+  --version v1.3.2 -n envoy-gateway-system --skip-crds \
+  --set-json 'certgen.job.securityContext.runAsUser=null' \
+  --set-json 'certgen.job.securityContext.runAsGroup=null' \
+  --set-json 'certgen.job.securityContext.seccompProfile=null'
+
+# 3. Grant privileged SCC to the main controller service account
+oc adm policy add-scc-to-user privileged -z envoy-gateway -n envoy-gateway-system
 ```
 
-Grant the required SCCs and create the GatewayClass:
+Create the GatewayClass:
 
 ```bash
-oc adm policy add-scc-to-user privileged -z envoy-gateway -n envoy-gateway-system
-
 cat <<EOF | oc apply -f -
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
