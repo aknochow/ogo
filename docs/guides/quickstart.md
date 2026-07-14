@@ -67,7 +67,7 @@ The certgen pre-install hook runs as uid 65534, outside OpenShift's allowed
 UID range. Pre-create the namespace and service account, grant SCC, then
 install with the UID overridden.
  
-IMPORTANT: On OpenShift 4.22+, Gateway API CRDs are managed by the Ingress Operator.
+IMPORTANT: On OpenShift 4.20+, Gateway API CRDs are managed by the Ingress Operator.
 Use `--skip-crds` to avoid conflicts. On 4.16-4.21, omit `--skip-crds`
 to let the Helm chart install the CRDs:
 
