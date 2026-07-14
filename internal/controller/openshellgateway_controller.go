@@ -209,7 +209,7 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		}
 	}
 
-	return ctrl.Result{RequeueAfter: requeueInterval}, r.updateStatus(ctx, gw, isOCP, useGWAPI)
+	return ctrl.Result{RequeueAfter: requeueInterval}, r.updateStatus(ctx, gw)
 }
 
 // --- Deletion ---
@@ -1237,7 +1237,7 @@ func (r *OpenShellGatewayReconciler) reconcileSCCBinding(ctx context.Context, gw
 
 // --- Status ---
 
-func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, isOCP, useGWAPI bool) error {
+func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
 	// Re-fetch to avoid conflicts from earlier mutations
 	latest := &ogov1alpha1.OpenShellGateway{}
 	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name}, latest); err != nil {
@@ -1287,31 +1287,10 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		Reason: "OK", Message: "",
 	})
 
-	latest.Status.GatewayURL = fmt.Sprintf("https://%s.%s.svc.cluster.local:8080", gw.Name, ns)
-	if isOCP {
-		if useGWAPI {
-			svcList := &corev1.ServiceList{}
-			if err := r.List(ctx, svcList, client.MatchingLabels{
-				"gateway.envoyproxy.io/owning-gateway-name":      gw.Name,
-				"gateway.envoyproxy.io/owning-gateway-namespace": ns,
-			}); err == nil && len(svcList.Items) > 0 {
-				route := &unstructured.Unstructured{}
-				route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
-				if err := r.Get(ctx, types.NamespacedName{Name: gw.Name + "-gw", Namespace: svcList.Items[0].Namespace}, route); err == nil {
-					if host, ok, _ := unstructured.NestedString(route.Object, "spec", "host"); ok && host != "" {
-						latest.Status.GatewayURL = "https://" + host + ":443"
-					}
-				}
-			}
-		} else {
-			route := &unstructured.Unstructured{}
-			route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
-			if err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, route); err == nil {
-				if host, ok, _ := unstructured.NestedString(route.Object, "spec", "host"); ok && host != "" {
-					latest.Status.GatewayURL = "https://" + host + ":443"
-				}
-			}
-		}
+	if gw.Spec.Route.Hostname != "" {
+		latest.Status.GatewayURL = "https://" + gw.Spec.Route.Hostname + ":443"
+	} else {
+		latest.Status.GatewayURL = fmt.Sprintf("https://%s.%s.svc.cluster.local:8080", gw.Name, ns)
 	}
 
 	latest.Status.ClientCertSecretName = gw.Name + "-client-tls"
