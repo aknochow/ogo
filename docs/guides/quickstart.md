@@ -104,11 +104,11 @@ oc wait --for=condition=Available deployment/ogo-controller-manager -n ogo --tim
 ### 4. Set up PostgreSQL
 
 ```bash
+oc adm policy add-scc-to-user anyuid -z default -n ogo
 oc create deployment ogo-pg -n ogo --image=docker.io/library/postgres:16
 oc set env deployment/ogo-pg -n ogo \
   POSTGRES_USER=openshell POSTGRES_PASSWORD=openshell POSTGRES_DB=openshell
 oc expose deployment/ogo-pg -n ogo --port=5432
-oc adm policy add-scc-to-user anyuid -z default -n ogo
 oc create secret generic ogo-pg -n ogo \
   --from-literal=uri='postgresql://openshell:openshell@ogo-pg.ogo.svc:5432/openshell'
 ```
