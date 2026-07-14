@@ -1,0 +1,12 @@
+schemaVersion: 2.2.2
+metadata:
+  generateName: ogo
+components:
+  - name: odi
+    container:
+      image: quay.io/aknochow/odi:latest
+      memoryLimit: 8Gi
+      cpuLimit: 4000m
+      env:
+        - name: SSL_CERT_FILE
+          value: /etc/pki/tls/certs/ca-bundle.crt
