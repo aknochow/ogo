@@ -13,11 +13,107 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  IMAGE_BASE: quay.io/aknochow
+  GHCR_BASE: ghcr.io/aknochow
+
 jobs:
-  images:
-    uses: ./.github/workflows/build-images.yml
-    with:
-      tags: main
-    secrets:
-      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
-      QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ogo
+            containerfile: Containerfile
+            runner: ubuntu-latest
+            arch: amd64
+          - image: ogo
+            containerfile: Containerfile
+            runner: ubuntu-24.04-arm
+            arch: arm64
+          - image: ogo-auth-bridge
+            containerfile: Containerfile.auth-bridge
+            runner: ubuntu-latest
+            arch: amd64
+          - image: ogo-auth-bridge
+            containerfile: Containerfile.auth-bridge
+            runner: ubuntu-24.04-arm
+            arch: arm64
+
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Login to Quay.io
+        run: podman login -u "$QUAY_USERNAME" -p "$QUAY_PASSWORD" quay.io
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+          QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Build image
+        run: podman build -f ${{ matrix.containerfile }} -t "${IMAGE_BASE}/${{ matrix.image }}:main-${{ matrix.arch }}" .
+
+      - name: Push image
+        run: podman push "${IMAGE_BASE}/${{ matrix.image }}:main-${{ matrix.arch }}"
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        image: [ogo, ogo-auth-bridge]
+
+    steps:
+      - name: Login to Quay.io
+        run: podman login -u "$QUAY_USERNAME" -p "$QUAY_PASSWORD" quay.io
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+          QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Create and push manifest
+        run: |
+          podman manifest create "${IMAGE_BASE}/${IMAGE}:main"
+          podman manifest add "${IMAGE_BASE}/${IMAGE}:main" "docker://${IMAGE_BASE}/${IMAGE}:main-amd64"
+          podman manifest add "${IMAGE_BASE}/${IMAGE}:main" "docker://${IMAGE_BASE}/${IMAGE}:main-arm64"
+          podman manifest push "${IMAGE_BASE}/${IMAGE}:main" "docker://${IMAGE_BASE}/${IMAGE}:main"
+        env:
+          IMAGE: ${{ matrix.image }}
+
+      - name: Inspect manifest
+        run: skopeo inspect --raw "docker://${IMAGE_BASE}/${IMAGE}:main" | python3 -m json.tool
+        env:
+          IMAGE: ${{ matrix.image }}
+
+  mirror:
+    needs: manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: [ogo, ogo-auth-bridge]
+
+    steps:
+      - name: Login to Quay.io
+        run: podman login -u "$QUAY_USERNAME" -p "$QUAY_PASSWORD" quay.io
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+          QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Login to GHCR
+        run: podman login -u "${{ github.repository_owner }}" -p "${{ secrets.GITHUB_TOKEN }}" ghcr.io
+
+      - name: Mirror to GHCR
+        run: |
+          skopeo copy --all \
+            "docker://${IMAGE_BASE}/${IMAGE}:main" \
+            "docker://${GHCR_BASE}/${IMAGE}:main"
+        env:
+          IMAGE: ${{ matrix.image }}

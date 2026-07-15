@@ -6,8 +6,8 @@ on:
       - 'v*'
 
 env:
-  REGISTRY: quay.io
   IMAGE_BASE: quay.io/aknochow
+  GHCR_BASE: ghcr.io/aknochow
 
 jobs:
   gate:
@@ -30,17 +30,129 @@ jobs:
       - name: Test
         run: make test
 
-  images:
+  build:
     needs: gate
-    uses: ./.github/workflows/build-images.yml
-    with:
-      tags: ${{ github.ref_name }}${{ !contains(github.ref_name, '-') && ' latest' || '' }}
-    secrets:
-      QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
-      QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ogo
+            containerfile: Containerfile
+            runner: ubuntu-latest
+            arch: amd64
+          - image: ogo
+            containerfile: Containerfile
+            runner: ubuntu-24.04-arm
+            arch: arm64
+          - image: ogo-auth-bridge
+            containerfile: Containerfile.auth-bridge
+            runner: ubuntu-latest
+            arch: amd64
+          - image: ogo-auth-bridge
+            containerfile: Containerfile.auth-bridge
+            runner: ubuntu-24.04-arm
+            arch: arm64
+
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Login to Quay.io
+        run: podman login -u "$QUAY_USERNAME" -p "$QUAY_PASSWORD" quay.io
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+          QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Build image
+        run: podman build -f ${{ matrix.containerfile }} -t "${IMAGE_BASE}/${{ matrix.image }}:${{ github.ref_name }}-${{ matrix.arch }}" .
+
+      - name: Push image
+        run: podman push "${IMAGE_BASE}/${{ matrix.image }}:${{ github.ref_name }}-${{ matrix.arch }}"
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        image: [ogo, ogo-auth-bridge]
+
+    steps:
+      - name: Login to Quay.io
+        run: podman login -u "$QUAY_USERNAME" -p "$QUAY_PASSWORD" quay.io
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+          QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Create and push manifest
+        run: |
+          TAG="${{ github.ref_name }}"
+          podman manifest create "${IMAGE_BASE}/${IMAGE}:${TAG}"
+          podman manifest add "${IMAGE_BASE}/${IMAGE}:${TAG}" "docker://${IMAGE_BASE}/${IMAGE}:${TAG}-amd64"
+          podman manifest add "${IMAGE_BASE}/${IMAGE}:${TAG}" "docker://${IMAGE_BASE}/${IMAGE}:${TAG}-arm64"
+          podman manifest push "${IMAGE_BASE}/${IMAGE}:${TAG}" "docker://${IMAGE_BASE}/${IMAGE}:${TAG}"
+        env:
+          IMAGE: ${{ matrix.image }}
+
+      - name: Tag as latest (stable releases only)
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          skopeo copy --all \
+            "docker://${IMAGE_BASE}/${IMAGE}:${{ github.ref_name }}" \
+            "docker://${IMAGE_BASE}/${IMAGE}:latest"
+        env:
+          IMAGE: ${{ matrix.image }}
+
+      - name: Inspect manifest
+        run: skopeo inspect --raw "docker://${IMAGE_BASE}/${IMAGE}:${{ github.ref_name }}" | python3 -m json.tool
+        env:
+          IMAGE: ${{ matrix.image }}
+
+  mirror:
+    needs: manifest
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        image: [ogo, ogo-auth-bridge]
+
+    steps:
+      - name: Login to Quay.io
+        run: podman login -u "$QUAY_USERNAME" -p "$QUAY_PASSWORD" quay.io
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+          QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Login to GHCR
+        run: podman login -u "${{ github.repository_owner }}" -p "${{ secrets.GITHUB_TOKEN }}" ghcr.io
+
+      - name: Mirror to GHCR
+        run: |
+          TAG="${{ github.ref_name }}"
+          skopeo copy --all \
+            "docker://${IMAGE_BASE}/${IMAGE}:${TAG}" \
+            "docker://${GHCR_BASE}/${IMAGE}:${TAG}"
+        env:
+          IMAGE: ${{ matrix.image }}
+
+      - name: Mirror latest to GHCR (stable releases only)
+        if: ${{ !contains(github.ref_name, '-') }}
+        run: |
+          skopeo copy --all \
+            "docker://${IMAGE_BASE}/${IMAGE}:latest" \
+            "docker://${GHCR_BASE}/${IMAGE}:latest"
+        env:
+          IMAGE: ${{ matrix.image }}
 
   bundle:
-    needs: images
+    needs: manifest
     if: ${{ !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
@@ -55,52 +167,38 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
-
       - name: Login to Quay.io
-        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_PASSWORD }}
+        run: podman login -u "$QUAY_USERNAME" -p "$QUAY_PASSWORD" quay.io
+        env:
+          QUAY_USERNAME: ${{ secrets.QUAY_USERNAME }}
+          QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
 
       - name: Set version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Generate bundle
-        run: make bundle IMG="${IMAGE_BASE}/ogo:${TAG}" VERSION="${VERSION}"
-        env:
-          IMAGE_BASE: ${{ env.IMAGE_BASE }}
-          TAG: ${{ github.ref_name }}
-          VERSION: ${{ steps.version.outputs.version }}
+        run: make bundle IMG="${IMAGE_BASE}/ogo:${{ github.ref_name }}" VERSION="${{ steps.version.outputs.version }}"
 
       - name: Build and push bundle image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          file: bundle.Dockerfile
-          push: true
-          tags: |
-            ${{ env.IMAGE_BASE }}/ogo-bundle:${{ github.ref_name }}
-            ${{ env.IMAGE_BASE }}/ogo-bundle:latest
+        run: |
+          podman build -f bundle.Dockerfile -t "${IMAGE_BASE}/ogo-bundle:${{ github.ref_name }}" .
+          podman push "${IMAGE_BASE}/ogo-bundle:${{ github.ref_name }}"
+          podman tag "${IMAGE_BASE}/ogo-bundle:${{ github.ref_name }}" "${IMAGE_BASE}/ogo-bundle:latest"
+          podman push "${IMAGE_BASE}/ogo-bundle:latest"
 
       - name: Build and push catalog image
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
-        with:
-          context: .
-          file: catalog.Dockerfile
-          push: true
-          tags: |
-            ${{ env.IMAGE_BASE }}/ogo-catalog:${{ github.ref_name }}
-            ${{ env.IMAGE_BASE }}/ogo-catalog:latest
+        run: |
+          podman build -f catalog.Dockerfile -t "${IMAGE_BASE}/ogo-catalog:${{ github.ref_name }}" .
+          podman push "${IMAGE_BASE}/ogo-catalog:${{ github.ref_name }}"
+          podman tag "${IMAGE_BASE}/ogo-catalog:${{ github.ref_name }}" "${IMAGE_BASE}/ogo-catalog:latest"
+          podman push "${IMAGE_BASE}/ogo-catalog:latest"
 
   release:
-    needs: [images, bundle]
+    needs: [manifest, bundle]
     if: >-
       always() &&
-      needs.images.result == 'success' &&
+      needs.manifest.result == 'success' &&
       (needs.bundle.result == 'success' || needs.bundle.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
