@@ -52,6 +52,21 @@ RUN curl -LsSf https://github.com/NVIDIA/OpenShell/releases/latest/download/open
   | tar xz -C /usr/local/bin/
 ```
 
+## Get your OpenShift user token
+
+The token exchange requires your OpenShift **user** token, not a
+ServiceAccount token. From inside a DevSpaces workspace, `oc login --web`
+redirects to localhost which doesn't work. Instead, get your token from
+the OpenShift console:
+
+1. Open the OpenShift console for the gateway cluster
+2. Click your username (top right) → **Copy login command** → **Display Token**
+3. Copy the `oc login --token=sha256~... --server=...` command
+4. Run it in the DevSpaces terminal
+
+For same-cluster, this replaces the default DevSpaces SA identity with
+your user identity. For cross-cluster, use a separate kubeconfig.
+
 ## Same-cluster setup
 
 When DevSpaces and OGO are on the same OpenShift cluster.
@@ -59,7 +74,14 @@ When DevSpaces and OGO are on the same OpenShift cluster.
 ### One-time setup
 
 ```bash
-# Trust the system CA bundle (required for Let's Encrypt YR1 intermediate)
+# Login as your user (get token from OpenShift console → Copy login command)
+oc login --token=sha256~YOUR_TOKEN --server=https://api.YOUR-CLUSTER.example.com:6443
+
+# Verify you're logged in as your user (not a ServiceAccount)
+oc whoami
+# Should show your username, not system:serviceaccount:...
+
+# Trust the system CA bundle
 export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
 
 # Exchange your OpenShift token for an OpenShell JWT
@@ -119,8 +141,15 @@ cluster's Routes must be network-reachable from the DevSpaces pod.
 ```bash
 export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
 
-# Login to the gateway cluster (separate kubeconfig)
-KUBECONFIG=~/.kube/remote-cluster oc login https://api.REMOTE-CLUSTER.example.com:6443
+# Login to the gateway cluster with a separate kubeconfig
+# Get the token from the gateway cluster's OpenShift console → Copy login command
+# Note: --insecure-skip-tls-verify is needed when the remote cluster's API CA
+# is not in the DevSpaces pod's trust store. For production, add the CA instead:
+#   cp remote-ca.crt /etc/pki/ca-trust/source/anchors/ && update-ca-trust
+KUBECONFIG=~/.kube/remote-cluster oc login \
+  --token=sha256~YOUR_TOKEN \
+  --server=https://api.REMOTE-CLUSTER.example.com:6443 \
+  --insecure-skip-tls-verify
 
 # Exchange the remote cluster's token
 REMOTE_TOKEN=$(KUBECONFIG=~/.kube/remote-cluster oc whoami -t)
@@ -186,8 +215,20 @@ Check that `oc whoami -t` returns a token:
 
 ```bash
 oc whoami -t
-# If empty, re-login:
-oc login --web
+# If empty, re-login with a token from the OpenShift console:
+oc login --token=sha256~YOUR_TOKEN --server=https://api.YOUR-CLUSTER.example.com:6443
+```
+
+### "user system:serviceaccount:... is not a member of group"
+
+You're using a ServiceAccount token instead of your user token.
+DevSpaces pods default to the workspace SA. Get your user token from
+the OpenShift console (**Copy login command**) and re-login:
+
+```bash
+oc login --token=sha256~YOUR_TOKEN --server=https://api.YOUR-CLUSTER.example.com:6443
+oc whoami
+# Should show your username, not system:serviceaccount:...
 ```
 
 ### "user is not a member of group"
