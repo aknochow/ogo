@@ -12,7 +12,7 @@ name = "patternfly-6-dark"
 [[project.badges]]
 label = "Version"
 url   = "https://github.com/aknochow/ogo/releases"
-img   = "https://img.shields.io/badge/version-alpha-orange"
+img   = "https://img.shields.io/badge/version-v0.1.0-orange"
 
 [[project.badges]]
 label = "Docs"
@@ -37,7 +37,7 @@ img   = "https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white"
 [[project.badges]]
 label = "OpenShell"
 url   = "https://github.com/NVIDIA/OpenShell/releases"
-img   = "https://img.shields.io/badge/OpenShell-v0.0.74-76b900?logo=nvidia&logoColor=white"
+img   = "https://img.shields.io/badge/OpenShell-v0.0.83-76b900?logo=nvidia&logoColor=white"
 
 # Navigation
 [[project.nav]]
@@ -62,6 +62,7 @@ img   = "https://img.shields.io/badge/OpenShell-v0.0.74-76b900?logo=nvidia&logoC
   { "Quickstart" = "guides/quickstart.md" },
   { "Envoy Gateway" = "guides/envoy-gateway.md" },
   { "OpenShift SSO" = "guides/openshift-sso.md" },
+  { "DevSpaces" = "guides/devspaces.md" },
 ]
 
 [[project.nav]]
