@@ -68,10 +68,14 @@ jobs:
           QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
 
       - name: Build image
-        run: podman build -f ${{ matrix.containerfile }} -t "${IMAGE_BASE}/${{ matrix.image }}:${{ github.ref_name }}-${{ matrix.arch }}" .
+        run: podman build -f ${{ matrix.containerfile }} -t "${IMAGE_BASE}/${{ matrix.image }}:${TAG}-${{ matrix.arch }}" .
+        env:
+          TAG: ${{ github.ref_name }}
 
       - name: Push image
-        run: podman push "${IMAGE_BASE}/${{ matrix.image }}:${{ github.ref_name }}-${{ matrix.arch }}"
+        run: podman push "${IMAGE_BASE}/${{ matrix.image }}:${TAG}-${{ matrix.arch }}"
+        env:
+          TAG: ${{ github.ref_name }}
 
   manifest:
     needs: build
@@ -91,27 +95,29 @@ jobs:
 
       - name: Create and push manifest
         run: |
-          TAG="${{ github.ref_name }}"
           podman manifest create "${IMAGE_BASE}/${IMAGE}:${TAG}"
           podman manifest add "${IMAGE_BASE}/${IMAGE}:${TAG}" "docker://${IMAGE_BASE}/${IMAGE}:${TAG}-amd64"
           podman manifest add "${IMAGE_BASE}/${IMAGE}:${TAG}" "docker://${IMAGE_BASE}/${IMAGE}:${TAG}-arm64"
           podman manifest push "${IMAGE_BASE}/${IMAGE}:${TAG}" "docker://${IMAGE_BASE}/${IMAGE}:${TAG}"
         env:
           IMAGE: ${{ matrix.image }}
+          TAG: ${{ github.ref_name }}
 
       - name: Tag as latest (stable releases only)
         if: ${{ !contains(github.ref_name, '-') }}
         run: |
           skopeo copy --all \
-            "docker://${IMAGE_BASE}/${IMAGE}:${{ github.ref_name }}" \
+            "docker://${IMAGE_BASE}/${IMAGE}:${TAG}" \
             "docker://${IMAGE_BASE}/${IMAGE}:latest"
         env:
           IMAGE: ${{ matrix.image }}
+          TAG: ${{ github.ref_name }}
 
       - name: Inspect manifest
-        run: skopeo inspect --raw "docker://${IMAGE_BASE}/${IMAGE}:${{ github.ref_name }}" | python3 -m json.tool
+        run: skopeo inspect --raw "docker://${IMAGE_BASE}/${IMAGE}:${TAG}" | python3 -m json.tool
         env:
           IMAGE: ${{ matrix.image }}
+          TAG: ${{ github.ref_name }}
 
   mirror:
     needs: manifest
@@ -131,16 +137,19 @@ jobs:
           QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
 
       - name: Login to GHCR
-        run: podman login -u "${{ github.repository_owner }}" -p "${{ secrets.GITHUB_TOKEN }}" ghcr.io
+        run: podman login -u "$GHCR_USER" -p "$GHCR_TOKEN" ghcr.io
+        env:
+          GHCR_USER: ${{ github.repository_owner }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Mirror to GHCR
         run: |
-          TAG="${{ github.ref_name }}"
           skopeo copy --all \
             "docker://${IMAGE_BASE}/${IMAGE}:${TAG}" \
             "docker://${GHCR_BASE}/${IMAGE}:${TAG}"
         env:
           IMAGE: ${{ matrix.image }}
+          TAG: ${{ github.ref_name }}
 
       - name: Mirror latest to GHCR (stable releases only)
         if: ${{ !contains(github.ref_name, '-') }}
@@ -178,21 +187,28 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Generate bundle
-        run: make bundle IMG="${IMAGE_BASE}/ogo:${{ github.ref_name }}" VERSION="${{ steps.version.outputs.version }}"
+        run: make bundle IMG="${IMAGE_BASE}/ogo:${TAG}" VERSION="${VERSION}"
+        env:
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ steps.version.outputs.version }}
 
       - name: Build and push bundle image
         run: |
-          podman build -f bundle.Dockerfile -t "${IMAGE_BASE}/ogo-bundle:${{ github.ref_name }}" .
-          podman push "${IMAGE_BASE}/ogo-bundle:${{ github.ref_name }}"
-          podman tag "${IMAGE_BASE}/ogo-bundle:${{ github.ref_name }}" "${IMAGE_BASE}/ogo-bundle:latest"
+          podman build -f bundle.Dockerfile -t "${IMAGE_BASE}/ogo-bundle:${TAG}" .
+          podman push "${IMAGE_BASE}/ogo-bundle:${TAG}"
+          podman tag "${IMAGE_BASE}/ogo-bundle:${TAG}" "${IMAGE_BASE}/ogo-bundle:latest"
           podman push "${IMAGE_BASE}/ogo-bundle:latest"
+        env:
+          TAG: ${{ github.ref_name }}
 
       - name: Build and push catalog image
         run: |
-          podman build -f catalog.Dockerfile -t "${IMAGE_BASE}/ogo-catalog:${{ github.ref_name }}" .
-          podman push "${IMAGE_BASE}/ogo-catalog:${{ github.ref_name }}"
-          podman tag "${IMAGE_BASE}/ogo-catalog:${{ github.ref_name }}" "${IMAGE_BASE}/ogo-catalog:latest"
+          podman build -f catalog.Dockerfile -t "${IMAGE_BASE}/ogo-catalog:${TAG}" .
+          podman push "${IMAGE_BASE}/ogo-catalog:${TAG}"
+          podman tag "${IMAGE_BASE}/ogo-catalog:${TAG}" "${IMAGE_BASE}/ogo-catalog:latest"
           podman push "${IMAGE_BASE}/ogo-catalog:latest"
+        env:
+          TAG: ${{ github.ref_name }}
 
   release:
     needs: [manifest, bundle]

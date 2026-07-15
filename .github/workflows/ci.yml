@@ -108,7 +108,10 @@ jobs:
           QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD }}
 
       - name: Login to GHCR
-        run: podman login -u "${{ github.repository_owner }}" -p "${{ secrets.GITHUB_TOKEN }}" ghcr.io
+        run: podman login -u "$GHCR_USER" -p "$GHCR_TOKEN" ghcr.io
+        env:
+          GHCR_USER: ${{ github.repository_owner }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Mirror to GHCR
         run: |
