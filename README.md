@@ -15,7 +15,7 @@ description: OpenShell Gateway Operator - deploy and manage OpenShell on OpenShi
 OGO is an OpenShift operator that deploys and manages NVIDIA OpenShell
 gateway instances. It handles TLS, authentication, ingress, and sandbox
 lifecycle so you can run AI coding agents in isolated sandboxes on any
-OpenShift cluster — cloud, on-prem, or local (including [MINC](https://github.com/openshift/microshift)).
+OpenShift cluster — cloud, on-prem, or local.
 
 ## Why OpenShift?
 
@@ -35,9 +35,6 @@ this safe:
 - **Audit logging** - full audit trail of sandbox API activity
 - **Operator Lifecycle Manager** - managed operator installs with
   console integration
-
-Vanilla Kubernetes provides none of these out of the box. Running untrusted
-agent workloads without these controls is not recommended.
 
 See [Why OpenShift](docs/concepts/why-openshift.md) for details.
 
