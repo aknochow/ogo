@@ -1,0 +1,97 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check upstream OpenShell release
+        id: check
+        run: |
+          LATEST=$(curl -s https://api.github.com/repos/NVIDIA/OpenShell/releases/latest | jq -r .tag_name)
+          CURRENT=$(grep -oP 'OpenShell-v\K[\d.]+' docs.toml | head -1)
+          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "latest_version=${LATEST#v}" >> "$GITHUB_OUTPUT"
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+
+          if [ "${LATEST#v}" != "${CURRENT}" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "OpenShell updated: v${CURRENT} → ${LATEST}"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "OpenShell is current: v${CURRENT}"
+          fi
+
+      - name: Update version references
+        if: steps.check.outputs.changed == 'true'
+        env:
+          OLD_VERSION: ${{ steps.check.outputs.current }}
+          NEW_VERSION: ${{ steps.check.outputs.latest_version }}
+        run: |
+          sed -i "s/OpenShell-v${OLD_VERSION}/OpenShell-v${NEW_VERSION}/g" docs.toml README.md
+          echo "Updated OpenShell badge: v${OLD_VERSION} → v${NEW_VERSION}"
+
+      - name: Compute release tag
+        if: steps.check.outputs.changed == 'true'
+        id: tag
+        run: |
+          # Base version from Makefile (e.g., 0.1.0)
+          BASE=$(grep -oP 'VERSION \?= \K[\d.]+' Makefile)
+
+          # Find the latest tag matching this base version
+          # Tags: v0.1.0, v0.1.0-1, v0.1.0-2, ...
+          LATEST_TAG=$(git tag -l "v${BASE}" "v${BASE}-*" | sort -t- -k2 -n | tail -1)
+
+          if [ -z "$LATEST_TAG" ]; then
+            # No tags for this base version yet
+            NEW_TAG="v${BASE}-1"
+          elif [ "$LATEST_TAG" = "v${BASE}" ]; then
+            # Base tag exists, first sync
+            NEW_TAG="v${BASE}-1"
+          else
+            # Increment the suffix: v0.1.0-3 → v0.1.0-4
+            SUFFIX=$(echo "$LATEST_TAG" | grep -oP '\-\K\d+$')
+            NEW_SUFFIX=$((SUFFIX + 1))
+            NEW_TAG="v${BASE}-${NEW_SUFFIX}"
+          fi
+
+          echo "tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
+          echo "base=${BASE}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${NEW_TAG}"
+
+      - name: Update version badge
+        if: steps.check.outputs.changed == 'true'
+        env:
+          BASE: ${{ steps.tag.outputs.base }}
+          NEW_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          # Update badge to show the sync tag
+          sed -i "s/version-v[0-9.]*\(-[0-9]*\)\{0,1\}/version-${NEW_TAG}/" docs.toml README.md
+
+      - name: Commit and tag
+        if: steps.check.outputs.changed == 'true'
+        env:
+          NEW_TAG: ${{ steps.tag.outputs.tag }}
+          OPENSHELL_VERSION: ${{ steps.check.outputs.latest }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs.toml README.md
+          git diff --cached --quiet && exit 0
+
+          git commit -m "chore: sync OpenShell ${OPENSHELL_VERSION}, tag ${NEW_TAG}"
+          git tag "${NEW_TAG}"
+          git push origin main --tags
