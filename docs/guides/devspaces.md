@@ -54,6 +54,9 @@ RUN curl -LsSf https://github.com/NVIDIA/OpenShell/releases/latest/download/open
 
 ## Get your OpenShift user token
 
+> Skip this section if using the [simple same-cluster setup](#same-cluster-setup-simple)
+> below — it does not require a token.
+
 The token exchange requires your OpenShift **user** token, not a
 ServiceAccount token. From inside a DevSpaces workspace, `oc login --web`
 redirects to localhost which doesn't work. Instead, get your token from
@@ -67,9 +70,31 @@ the OpenShift console:
 For same-cluster, this replaces the default DevSpaces SA identity with
 your user identity. For cross-cluster, use a separate kubeconfig.
 
-## Same-cluster setup
+## Same-cluster setup (simple)
 
-When DevSpaces and OGO are on the same OpenShift cluster.
+When DevSpaces and OGO are on the same OpenShift cluster, use the
+cluster-internal gateway endpoint. No token exchange needed. Traffic
+is unencrypted on the pod network; clusters with a service mesh
+(Istio, etc.) handle encryption transparently.
+
+```bash
+openshell gateway add http://openshell.ogo.svc:8080 --name my-cluster
+openshell sandbox create
+```
+
+This requires `spec.auth.allowUnauthenticated: true` on the gateway CR.
+The internal service is only reachable from within the cluster. The
+external Route still requires OIDC authentication.
+
+> **Warning:** `allowUnauthenticated` disables authentication for all
+> cluster-internal traffic. Use only on dev/test clusters. On shared
+> or multi-tenant clusters, use the
+> [authenticated setup](#same-cluster-setup-with-auth) instead.
+
+## Same-cluster setup (with auth)
+
+For clusters where `allowUnauthenticated` is disabled, use the token
+exchange flow. This validates group membership.
 
 ### One-time setup
 

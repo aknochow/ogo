@@ -23,11 +23,13 @@ import (
 	. "github.com/onsi/gomega"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
@@ -209,6 +211,160 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		svc := &corev1.Service{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, svc)).To(Succeed())
 		Expect(svc.Spec.Ports).To(HaveLen(2))
+	})
+
+	It("should set status URL from route hostname", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		// Default: no hostname set, should use internal service URL
+		Expect(gw.Status.GatewayURL).To(ContainSubstring("svc.cluster.local:8080"))
+	})
+
+	It("should set status URL from route hostname when configured", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		gw.Spec.Route.Hostname = "openshell.apps.example.com"
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		Expect(gw.Status.GatewayURL).To(Equal("https://openshell.apps.example.com:443"))
+	})
+
+	It("should include auth port in service when OpenShift auth enabled", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		svc := &corev1.Service{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, svc)).To(Succeed())
+		portNames := []string{}
+		for _, p := range svc.Spec.Ports {
+			portNames = append(portNames, p.Name)
+		}
+		Expect(portNames).To(ContainElement("grpc"))
+		Expect(portNames).To(ContainElement("metrics"))
+	})
+
+	It("should include allow_unauthenticated in config when enabled", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		gw.Spec.Auth.AllowUnauthenticated = true
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		cm := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-config", Namespace: "ogo-test"}, cm)).To(Succeed())
+		Expect(cm.Data["gateway.toml"]).To(ContainSubstring("allow_unauthenticated_users = true"))
+	})
+
+	It("should not include allow_unauthenticated by default", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		cm := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-config", Namespace: "ogo-test"}, cm)).To(Succeed())
+		Expect(cm.Data["gateway.toml"]).NotTo(ContainSubstring("allow_unauthenticated"))
+	})
+
+	It("should create deployment with correct container image", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		deploy := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, deploy)).To(Succeed())
+		container := deploy.Spec.Template.Spec.Containers[0]
+		Expect(container.Image).To(ContainSubstring("openshell/gateway"))
+	})
+
+	It("should mount TLS volumes when TLS enabled", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		deploy := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, deploy)).To(Succeed())
+		volumeNames := []string{}
+		for _, v := range deploy.Spec.Template.Spec.Volumes {
+			volumeNames = append(volumeNames, v.Name)
+		}
+		Expect(volumeNames).To(ContainElement("tls-cert"))
+		Expect(volumeNames).To(ContainElement("tls-client-ca"))
+		Expect(volumeNames).To(ContainElement("gateway-config"))
+		Expect(volumeNames).To(ContainElement("sandbox-jwt"))
+	})
+
+	It("should create network policy when enabled", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		gw.Spec.NetworkPolicy.Enabled = ptr.To(true)
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		np := &networkingv1.NetworkPolicy{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-sandbox-ssh", Namespace: "ogo-test"}, np)).To(Succeed())
+	})
+
+	It("should not create network policy when explicitly disabled", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		gw.Spec.NetworkPolicy.Enabled = ptr.To(false)
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		np := &networkingv1.NetworkPolicy{}
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-sandbox-ssh", Namespace: "ogo-test"}, np)
+		Expect(errors.IsNotFound(err)).To(BeTrue())
+	})
+
+	It("should set status conditions after reconcile", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		Expect(gw.Status.Conditions).NotTo(BeEmpty())
+
+		conditionTypes := []string{}
+		for _, c := range gw.Status.Conditions {
+			conditionTypes = append(conditionTypes, c.Type)
+		}
+		Expect(conditionTypes).To(ContainElement(ogov1alpha1.ConditionAvailable))
+		Expect(conditionTypes).To(ContainElement(ogov1alpha1.ConditionProgressing))
+		Expect(conditionTypes).To(ContainElement(ogov1alpha1.ConditionDegraded))
+	})
+
+	It("should set client cert secret name in status", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		Expect(gw.Status.ClientCertSecretName).To(Equal(gwName + "-client-tls"))
 	})
 
 	It("should clean up on deletion", func() {
