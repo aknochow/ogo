@@ -31,8 +31,8 @@ img   = "https://img.shields.io/badge/license-Apache%202.0-green"
 
 [[project.badges]]
 label = "Go"
-url   = "https://go.dev/doc/go1.24"
-img   = "https://img.shields.io/badge/go-1.24-00ADD8?logo=go&logoColor=white"
+url   = "https://go.dev/doc/go1.26"
+img   = "https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white"
 
 [[project.badges]]
 label = "OpenShell"
