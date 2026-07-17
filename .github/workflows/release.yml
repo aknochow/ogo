@@ -226,6 +226,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
       - name: Generate changelog
         id: changelog
         uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4
@@ -233,10 +238,40 @@ jobs:
           config: cliff.toml
           args: --verbose --latest --strip header
 
+      - name: Collect dependency versions
+        id: deps
+        run: |
+          OPENSHELL=$(grep -oP 'OpenShell-v\K[\d.]+' docs.toml | head -1)
+          GO_VERSION=$(go version | grep -oP 'go\K[\d.]+')
+          CONTROLLER_RUNTIME=$(go list -m -f '{{ .Version }}' sigs.k8s.io/controller-runtime)
+          K8S_API=$(go list -m -f '{{ .Version }}' k8s.io/api)
+          OPERATOR_SDK=$(grep -oP 'OPERATOR_SDK_VERSION \?= v\K[\d.]+' Makefile)
+
+          cat > /tmp/deps.md <<DEPSEOF
+
+          ---
+
+          ### Dependencies
+
+          | Component | Version |
+          |-----------|---------|
+          | OpenShell Gateway | v${OPENSHELL} |
+          | Go | ${GO_VERSION} |
+          | controller-runtime | ${CONTROLLER_RUNTIME} |
+          | k8s.io/api | ${K8S_API} |
+          | operator-sdk | v${OPERATOR_SDK} |
+          DEPSEOF
+
+          echo "deps<<GHEOF" >> "$GITHUB_OUTPUT"
+          cat /tmp/deps.md >> "$GITHUB_OUTPUT"
+          echo "GHEOF" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
-          body: ${{ steps.changelog.outputs.content }}
+          body: |
+            ${{ steps.changelog.outputs.content }}
+            ${{ steps.deps.outputs.deps }}
           prerelease: ${{ contains(github.ref_name, '-') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
