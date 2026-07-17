@@ -12,7 +12,7 @@ name = "patternfly-6-dark"
 [[project.badges]]
 label = "Version"
 url   = "https://github.com/aknochow/ogo/releases"
-img   = "https://img.shields.io/badge/version-v0.1.0-6orange"
+img   = "https://img.shields.io/badge/version-v0.1.0-orange"
 
 [[project.badges]]
 label = "Docs"

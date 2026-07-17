@@ -48,38 +48,12 @@ jobs:
         if: steps.check.outputs.changed == 'true'
         id: tag
         run: |
-          # Base version from Makefile (e.g., 0.1.0)
           BASE=$(grep -oP 'VERSION \?= \K[\d.]+' Makefile)
-
-          # Find the latest tag matching this base version
-          # Tags: v0.1.0, v0.1.0-1, v0.1.0-2, ...
-          LATEST_TAG=$(git tag -l "v${BASE}" "v${BASE}-*" | sort -t- -k2 -n | tail -1)
-
-          if [ -z "$LATEST_TAG" ]; then
-            # No tags for this base version yet
-            NEW_TAG="v${BASE}-1"
-          elif [ "$LATEST_TAG" = "v${BASE}" ]; then
-            # Base tag exists, first sync
-            NEW_TAG="v${BASE}-1"
-          else
-            # Increment the suffix: v0.1.0-3 → v0.1.0-4
-            SUFFIX=$(echo "$LATEST_TAG" | grep -oP '\-\K\d+$')
-            NEW_SUFFIX=$((SUFFIX + 1))
-            NEW_TAG="v${BASE}-${NEW_SUFFIX}"
-          fi
+          NEW_TAG="v${BASE}-$(date -u +%Y%m%d.%H%M)"
 
           echo "tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
           echo "base=${BASE}" >> "$GITHUB_OUTPUT"
           echo "Release tag: ${NEW_TAG}"
-
-      - name: Update version badge
-        if: steps.check.outputs.changed == 'true'
-        env:
-          BASE: ${{ steps.tag.outputs.base }}
-          NEW_TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          # Update badge to show the sync tag
-          sed -i "s/version-v[0-9.]*\(-[0-9]*\)\{0,1\}/version-${NEW_TAG}/" docs.toml README.md
 
       - name: Commit and tag
         if: steps.check.outputs.changed == 'true'
@@ -89,7 +63,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs.toml README.md
+          git add -A
           git diff --cached --quiet && exit 0
 
           git commit -m "chore: sync OpenShell ${OPENSHELL_VERSION}, tag ${NEW_TAG}"
