@@ -37,7 +37,7 @@ img   = "https://img.shields.io/badge/go-1.26-00ADD8?logo=go&logoColor=white"
 [[project.badges]]
 label = "OpenShell"
 url   = "https://github.com/NVIDIA/OpenShell/releases"
-img   = "https://img.shields.io/badge/OpenShell-v0.0.85-76b900?logo=nvidia&logoColor=white"
+img   = "https://img.shields.io/badge/OpenShell-v0.0.86-76b900?logo=nvidia&logoColor=white"
 
 # Navigation
 [[project.nav]]
