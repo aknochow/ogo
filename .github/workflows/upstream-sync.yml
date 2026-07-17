@@ -93,5 +93,6 @@ jobs:
           git diff --cached --quiet && exit 0
 
           git commit -m "chore: sync OpenShell ${OPENSHELL_VERSION}, tag ${NEW_TAG}"
+          git push origin main || exit 1
           git tag "${NEW_TAG}"
-          git push origin main --tags
+          git push origin "${NEW_TAG}"
