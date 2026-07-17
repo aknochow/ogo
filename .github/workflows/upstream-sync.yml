@@ -49,7 +49,7 @@ jobs:
         id: tag
         run: |
           BASE=$(grep -oP 'VERSION \?= \K[\d.]+' Makefile)
-          NEW_TAG="v${BASE}-$(date -u +%Y%m%d.%H%M)"
+          NEW_TAG="v${BASE}-$(date -u +%y%m%d%H%M)"
 
           echo "tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
           echo "base=${BASE}" >> "$GITHUB_OUTPUT"
