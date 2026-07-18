@@ -246,7 +246,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 
 		svc := &corev1.Service{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, svc)).To(Succeed())
-		portNames := []string{}
+		portNames := make([]string, 0, len(svc.Spec.Ports))
 		for _, p := range svc.Spec.Ports {
 			portNames = append(portNames, p.Name)
 		}
@@ -298,7 +298,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 
 		deploy := &appsv1.Deployment{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, deploy)).To(Succeed())
-		volumeNames := []string{}
+		volumeNames := make([]string, 0, len(deploy.Spec.Template.Spec.Volumes))
 		for _, v := range deploy.Spec.Template.Spec.Volumes {
 			volumeNames = append(volumeNames, v.Name)
 		}
