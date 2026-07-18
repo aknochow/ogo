@@ -348,7 +348,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
 		Expect(gw.Status.Conditions).NotTo(BeEmpty())
 
-		conditionTypes := []string{}
+		conditionTypes := make([]string, 0, len(gw.Status.Conditions))
 		for _, c := range gw.Status.Conditions {
 			conditionTypes = append(conditionTypes, c.Type)
 		}
