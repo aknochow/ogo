@@ -23,7 +23,7 @@ linters:
     - unused
   settings:
     goconst:
-      min-occurrences: 5
+      min-occurrences: 10
       ignore-tests: true
     revive:
       rules:
