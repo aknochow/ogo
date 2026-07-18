@@ -33,6 +33,8 @@ import (
 	"time"
 )
 
+const algRS256 = "RS256"
+
 type JWTSigner struct {
 	privateKey *rsa.PrivateKey
 	kid        string
@@ -122,7 +124,7 @@ func (s *JWTSigner) MintToken(issuer, audience, subject, username, email string,
 		RealmAccess:       RealmAccess{Roles: roles},
 	}
 
-	header := map[string]string{"alg": "RS256", "typ": "JWT", "kid": s.kid}
+	header := map[string]string{"alg": algRS256, "typ": "JWT", "kid": s.kid}
 
 	headerJSON, err := json.Marshal(header)
 	if err != nil {
@@ -169,7 +171,7 @@ func (s *JWTSigner) JWKS() JWKSResponse {
 			E:   base64.RawURLEncoding.EncodeToString(big.NewInt(int64(pub.E)).Bytes()),
 			Kid: s.kid,
 			Use: "sig",
-			Alg: "RS256",
+			Alg: algRS256,
 		}},
 	}
 }

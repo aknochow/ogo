@@ -71,7 +71,7 @@ type TokenResponse struct {
 
 func (c *OpenShiftClient) ExchangeCode(ctx context.Context, code, redirectURI string) (*TokenResponse, error) {
 	data := url.Values{
-		"grant_type":   {"authorization_code"},
+		"grant_type":   {grantAuthorizationCode},
 		"code":         {code},
 		"redirect_uri": {redirectURI},
 	}

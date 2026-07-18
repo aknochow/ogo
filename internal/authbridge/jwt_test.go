@@ -28,8 +28,6 @@ import (
 	"time"
 )
 
-const algRS256 = "RS256"
-
 func TestNewJWTSigner(t *testing.T) {
 	signer, err := NewJWTSigner()
 	if err != nil {

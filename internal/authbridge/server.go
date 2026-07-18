@@ -29,6 +29,14 @@ import (
 	"time"
 )
 
+const (
+	grantAuthorizationCode = "authorization_code"
+	responseTypeCode       = "code"
+	tokenTypeBearer        = "Bearer"
+	roleUser               = "openshell-user"
+	roleAdmin              = "openshell-admin"
+)
+
 type Config struct {
 	Issuer         string // Internal issuer (http://localhost:8085) — used by gateway OIDC discovery
 	ExternalIssuer string // External issuer (https://openshell-auth.apps...) — used in JWTs and CLI redirects
@@ -117,8 +125,8 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"authorization_endpoint":                s.config.ExternalIssuer + "/authorize",
 		"token_endpoint":                        s.config.ExternalIssuer + "/token",
 		"jwks_uri":                              base + "/jwks",
-		"response_types_supported":              []string{"code"},
-		"grant_types_supported":                 []string{"authorization_code"},
+		"response_types_supported":              []string{responseTypeCode},
+		"grant_types_supported":                 []string{grantAuthorizationCode},
 		"subject_types_supported":               []string{"public"},
 		"token_endpoint_auth_methods_supported": []string{"client_secret_basic"},
 		"scopes_supported":                      []string{"openid", "profile", "email"},
@@ -294,7 +302,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	grantType := r.FormValue("grant_type")
-	if grantType != "authorization_code" {
+	if grantType != grantAuthorizationCode {
 		http.Error(w, `{"error":"unsupported_grant_type"}`, http.StatusBadRequest)
 		return
 	}
@@ -316,7 +324,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"access_token": pending.jwt,
-		"token_type":   "Bearer",
+		"token_type":   tokenTypeBearer,
 		"expires_in":   int(s.config.TokenTTL.Seconds()),
 	})
 }
@@ -369,7 +377,7 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"access_token": jwt,
-		"token_type":   "Bearer",
+		"token_type":   tokenTypeBearer,
 		"expires_in":   int(s.config.TokenTTL.Seconds()),
 		"expires_at":   expiresAt,
 		"issuer":       s.config.ExternalIssuer,
@@ -393,11 +401,11 @@ func (s *Server) isAuthorized(username string, groups []string) bool {
 }
 
 func (s *Server) mapRoles(groups []string) []string {
-	roles := []string{"openshell-user"}
+	roles := []string{roleUser}
 	if s.config.AdminGroup != "" {
 		for _, g := range groups {
 			if g == s.config.AdminGroup {
-				roles = append(roles, "openshell-admin")
+				roles = append(roles, roleAdmin)
 				break
 			}
 		}
