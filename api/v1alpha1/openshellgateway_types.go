@@ -279,7 +279,3 @@ type OpenShellGatewayList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []OpenShellGateway `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&OpenShellGateway{}, &OpenShellGatewayList{})
-}
