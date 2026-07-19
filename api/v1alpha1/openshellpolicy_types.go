@@ -142,7 +142,3 @@ type OpenShellPolicyList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []OpenShellPolicy `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&OpenShellPolicy{}, &OpenShellPolicyList{})
-}

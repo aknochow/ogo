@@ -85,7 +85,3 @@ type OpenShellProviderList struct {
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []OpenShellProvider `json:"items"`
 }
-
-func init() {
-	SchemeBuilder.Register(&OpenShellProvider{}, &OpenShellProviderList{})
-}
