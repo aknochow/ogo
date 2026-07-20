@@ -328,17 +328,31 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 
 func (r *OpenShellGatewayReconciler) validateDatabaseSecret(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
 	ns := gatewayNamespace(gw)
+	secretName := databaseSecretName(gw)
+	if secretName == "" {
+		return fmt.Errorf("either spec.database.secretName or spec.database.embedded must be set")
+	}
 	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: gw.Spec.Database.SecretName, Namespace: ns}, secret); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, secret); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("database secret %q not found in namespace %q", gw.Spec.Database.SecretName, ns)
+			return fmt.Errorf("database secret %q not found in namespace %q", secretName, ns)
 		}
 		return fmt.Errorf("checking database secret: %w", err)
 	}
 	if _, ok := secret.Data["uri"]; !ok {
-		return fmt.Errorf("database secret %q missing required key \"uri\"", gw.Spec.Database.SecretName)
+		return fmt.Errorf("database secret %q missing required key \"uri\"", secretName)
 	}
 	return nil
+}
+
+func databaseSecretName(gw *ogov1alpha1.OpenShellGateway) string {
+	if gw.Spec.Database.SecretName != "" {
+		return gw.Spec.Database.SecretName
+	}
+	if gw.Spec.Database.Embedded {
+		return gw.Name + "-pg-uri"
+	}
+	return ""
 }
 
 // --- Namespace ---
@@ -709,7 +723,7 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 				Name: "OPENSHELL_DB_URL",
 				ValueFrom: &corev1.EnvVarSource{
 					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: gw.Spec.Database.SecretName},
+						LocalObjectReference: corev1.LocalObjectReference{Name: databaseSecretName(gw)},
 						Key:                  "uri",
 					},
 				},
@@ -1342,8 +1356,9 @@ func (r *OpenShellGatewayReconciler) setDegraded(ctx context.Context, gw *ogov1a
 // --- Dependencies ---
 
 func (r *OpenShellGatewayReconciler) dependencies() []DependencyReconciler {
-	// Return empty for now — dependencies are added in subsequent phases
-	return nil
+	return []DependencyReconciler{
+		&PostgreSQLReconciler{Client: r.Client},
+	}
 }
 
 // --- Setup ---
