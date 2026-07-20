@@ -71,6 +71,12 @@ spec:
                           AdminGroup is the OpenShift group that maps to the openshell-admin role.
                           Users in this group get admin access to the gateway.
                         type: string
+                      autoCreateGroups:
+                        default: true
+                        description: |-
+                          AutoCreateGroups creates the OpenShift groups specified by userGroup
+                          and adminGroup if they don't already exist. Does not add users.
+                        type: boolean
                       enabled:
                         description: |-
                           Enabled activates OpenShift OAuth authentication.
@@ -96,15 +102,35 @@ spec:
               database:
                 description: Database configures the PostgreSQL connection.
                 properties:
+                  embedded:
+                    default: false
+                    description: |-
+                      Embedded deploys a single-pod dev PostgreSQL in the gateway namespace.
+                      NOT for production use. Mutually exclusive with SecretName.
+                    type: boolean
+                  embeddedConfig:
+                    description: EmbeddedConfig configures the embedded dev PostgreSQL.
+                    properties:
+                      image:
+                        default: registry.redhat.io/rhel9/postgresql-16:latest
+                        description: Image is the PostgreSQL container image.
+                        type: string
+                      storageSize:
+                        default: 1Gi
+                        description: StorageSize is the PVC size for PostgreSQL data.
+                        pattern: ^[0-9]+(Ki|Mi|Gi|Ti)$
+                        type: string
+                    type: object
                   secretName:
                     description: |-
                       SecretName references a Secret containing the PostgreSQL connection URI.
                       The Secret must have a key named "uri".
-                    minLength: 1
+                      When set, embedded PostgreSQL is not deployed.
                     type: string
-                required:
-                - secretName
                 type: object
+                x-kubernetes-validations:
+                - message: embedded and secretName are mutually exclusive
+                  rule: '!(self.embedded && self.secretName != '''')'
               image:
                 default: ghcr.io/nvidia/openshell/gateway
                 description: Image is the gateway container image.
@@ -156,7 +182,7 @@ spec:
                       Claims lists the names of resources, defined in spec.resourceClaims,
                       that are used by this container.
 
-                      This is an alpha field and requires enabling the
+                      This field depends on the
                       DynamicResourceAllocation feature gate.
 
                       This field is immutable. It can only be set for containers.
@@ -231,6 +257,13 @@ spec:
                           to use.
                         maxLength: 253
                         type: string
+                      installEnvoyGateway:
+                        default: true
+                        description: |-
+                          InstallEnvoyGateway auto-installs Envoy Gateway when no matching
+                          GatewayClass is found on the cluster. Set to false if Envoy Gateway
+                          is managed externally.
+                        type: boolean
                     type: object
                   hostname:
                     description: Hostname is the custom hostname for the Route (e.g.

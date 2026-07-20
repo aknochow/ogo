@@ -111,6 +111,7 @@ func (p *PostgreSQLReconciler) Cleanup(ctx context.Context, gw *ogov1alpha1.Open
 		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-pg", Namespace: ns}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-pg-password", Namespace: ns}},
 		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-pg-uri", Namespace: ns}},
+		&corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-pg-data", Namespace: ns}},
 	} {
 		existing := obj.DeepCopyObject().(client.Object)
 		if err := p.Get(ctx, types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}, existing); err == nil {
@@ -127,8 +128,12 @@ func (p *PostgreSQLReconciler) Cleanup(ctx context.Context, gw *ogov1alpha1.Open
 func (p *PostgreSQLReconciler) ensurePasswordSecret(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, ns string, labels map[string]string) (string, error) {
 	secretName := gw.Name + "-pg-password"
 	existing := &corev1.Secret{}
-	if err := p.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing); err == nil {
+	err := p.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing)
+	if err == nil {
 		return string(existing.Data["password"]), nil
+	}
+	if !errors.IsNotFound(err) {
+		return "", fmt.Errorf("checking password secret: %w", err)
 	}
 
 	password := generatePassword()
@@ -196,6 +201,20 @@ func (p *PostgreSQLReconciler) ensureDeployment(ctx context.Context, gw *ogov1al
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "pgdata", MountPath: "/var/lib/pgsql/data"},
 					},
+					ReadinessProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{
+							TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(5432)},
+						},
+						InitialDelaySeconds: 5,
+						PeriodSeconds:       10,
+					},
+					LivenessProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{
+							TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(5432)},
+						},
+						InitialDelaySeconds: 30,
+						PeriodSeconds:       30,
+					},
 					Resources: corev1.ResourceRequirements{
 						Requests: corev1.ResourceList{
 							corev1.ResourceMemory: resource.MustParse("128Mi"),
@@ -203,6 +222,11 @@ func (p *PostgreSQLReconciler) ensureDeployment(ctx context.Context, gw *ogov1al
 						Limits: corev1.ResourceList{
 							corev1.ResourceMemory: resource.MustParse("256Mi"),
 						},
+					},
+					SecurityContext: &corev1.SecurityContext{
+						AllowPrivilegeEscalation: ptr.To(false),
+						RunAsNonRoot:             ptr.To(true),
+						Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
 					},
 				}},
 				Volumes: []corev1.Volume{
@@ -235,8 +259,12 @@ func (p *PostgreSQLReconciler) ensureService(ctx context.Context, gw *ogov1alpha
 func (p *PostgreSQLReconciler) ensureURISecret(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, ns string, labels map[string]string, password string) error {
 	secretName := gw.Name + "-pg-uri"
 	existing := &corev1.Secret{}
-	if err := p.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing); err == nil {
+	err := p.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing)
+	if err == nil {
 		return nil
+	}
+	if !errors.IsNotFound(err) {
+		return fmt.Errorf("checking URI secret: %w", err)
 	}
 
 	svcName := gw.Name + "-pg"

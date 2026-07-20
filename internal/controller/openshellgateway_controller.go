@@ -1326,6 +1326,10 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		Reason: "OK", Message: "",
 	})
 
+	for _, c := range gw.Status.Conditions {
+		meta.SetStatusCondition(&latest.Status.Conditions, c)
+	}
+
 	if gw.Spec.Route.Hostname != "" {
 		latest.Status.GatewayURL = "https://" + gw.Spec.Route.Hostname + ":443"
 	} else {

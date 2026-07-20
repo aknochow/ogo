@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -74,7 +75,7 @@ func (e *EnvoyProxySCCReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1
 	granted := 0
 	for i := range saList.Items {
 		sa := &saList.Items[i]
-		if sa.Name == "default" || sa.Name == "envoy-gateway" || sa.Name == "envoy-gateway-certgen" {
+		if !strings.HasPrefix(sa.Name, "envoy-") || sa.Name == "envoy-gateway" || sa.Name == "envoy-gateway-certgen" {
 			continue
 		}
 
