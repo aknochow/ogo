@@ -141,12 +141,26 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	log.Info("Reconciling OpenShellGateway", "namespace", ns, "sandbox_namespace", sandboxNS, "openshift", isOCP, "gatewayAPI", useGWAPI)
 
+	// Phase 1: Auto-provision dependencies
+	for _, dep := range r.dependencies() {
+		if !dep.Enabled(ctx, gw) {
+			continue
+		}
+		condition, err := dep.Reconcile(ctx, gw)
+		meta.SetStatusCondition(&gw.Status.Conditions, condition)
+		if err != nil {
+			log.Error(err, "Dependency reconcile failed", "dependency", dep.Name())
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, dep.Name(), err)
+		}
+	}
+
 	// Validate prerequisites before creating resources
 	if err := r.validateDatabaseSecret(ctx, gw); err != nil {
 		log.Error(err, "Database secret validation failed")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "DatabaseSecret", err)
 	}
 
+	// Phase 2: Core gateway resources
 	steps := []struct {
 		name string
 		fn   func(context.Context, *ogov1alpha1.OpenShellGateway) error
@@ -222,6 +236,14 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 	}
 
 	log.Info("Cleaning up gateway resources")
+
+	// Clean up dependencies in reverse order
+	deps := r.dependencies()
+	for i := len(deps) - 1; i >= 0; i-- {
+		if err := deps[i].Cleanup(ctx, gw); err != nil {
+			log.Error(err, "Failed to clean up dependency", "name", deps[i].Name())
+		}
+	}
 
 	ns := gatewayNamespace(gw)
 	sandboxNS := sandboxNamespace(gw)
@@ -1315,6 +1337,13 @@ func (r *OpenShellGatewayReconciler) setDegraded(ctx context.Context, gw *ogov1a
 		log.Error(err, "Failed to update degraded status")
 	}
 	return reconcileErr
+}
+
+// --- Dependencies ---
+
+func (r *OpenShellGatewayReconciler) dependencies() []DependencyReconciler {
+	// Return empty for now — dependencies are added in subsequent phases
+	return nil
 }
 
 // --- Setup ---
