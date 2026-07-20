@@ -1357,6 +1357,8 @@ func (r *OpenShellGatewayReconciler) setDegraded(ctx context.Context, gw *ogov1a
 
 func (r *OpenShellGatewayReconciler) dependencies() []DependencyReconciler {
 	return []DependencyReconciler{
+		&EnvoyGatewayReconciler{Client: r.Client, DiscoveryClient: r.DiscoveryClient},
+		&EnvoyProxySCCReconciler{Client: r.Client, DiscoveryClient: r.DiscoveryClient},
 		&PostgreSQLReconciler{Client: r.Client},
 		&GroupsReconciler{Client: r.Client, DiscoveryClient: r.DiscoveryClient},
 	}

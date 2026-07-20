@@ -20,6 +20,7 @@ import (
 	"context"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
 )
@@ -46,6 +47,11 @@ func ownershipLabels(component string, gw *ogov1alpha1.OpenShellGateway) map[str
 		labelManagedBy:     managedByValue,
 	}
 }
+
+var (
+	gatewayClassGVK       = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GatewayClass"}
+	clusterRoleBindingGVK = schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding"}
+)
 
 func isOwnedByOGO(labels map[string]string) bool {
 	return labels != nil && labels[labelProvisionedBy] == provisionedByOGO
