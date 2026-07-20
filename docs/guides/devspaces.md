@@ -1,19 +1,19 @@
 ---
 type: Guide
-title: DevSpaces Integration
-description: Create OpenShell sandboxes from Red Hat OpenShift DevSpaces workspaces using headless token exchange.
+title: Dev Spaces Integration
+description: Create OpenShell sandboxes from Red Hat OpenShift Dev Spaces workspaces using headless token exchange.
 tags: [devspaces, authentication, headless]
 ---
 
-# DevSpaces integration
+# Dev Spaces integration
 
-Create OpenShell sandboxes from a DevSpaces workspace without a browser.
+Create OpenShell sandboxes from a Dev Spaces workspace without a browser.
 Works on the same cluster or across clusters.
 
 ## How it works
 
 ```
-DevSpaces workspace
+Dev Spaces workspace
   │
   ├─ oc whoami -t              → OpenShift token (already authenticated)
   │
@@ -25,18 +25,18 @@ DevSpaces workspace
 
 The auth-bridge's `/token/exchange` endpoint accepts an OpenShift bearer
 token and returns an OpenShell JWT. No browser redirect needed — the user
-is already authenticated to OpenShift in DevSpaces.
+is already authenticated to OpenShift in Dev Spaces.
 
 ## Prerequisites
 
 - OGO deployed with OpenShift SSO enabled ([Quickstart](quickstart.md))
 - User in the `openshell-users` group ([OpenShift SSO](openshift-sso.md))
-- `openshell` CLI installed in the DevSpaces workspace
+- `openshell` CLI installed in the Dev Spaces workspace
 - `jq` available in the workspace
 
 ## Install the OpenShell CLI (if not in your workspace image)
 
-If your DevSpaces workspace image does not include the `openshell` CLI,
+If your Dev Spaces workspace image does not include the `openshell` CLI,
 install it manually:
 
 ```bash
@@ -58,21 +58,21 @@ RUN curl -LsSf https://github.com/NVIDIA/OpenShell/releases/latest/download/open
 > below — it does not require a token.
 
 The token exchange requires your OpenShift **user** token, not a
-ServiceAccount token. From inside a DevSpaces workspace, `oc login --web`
+ServiceAccount token. From inside a Dev Spaces workspace, `oc login --web`
 redirects to localhost which doesn't work. Instead, get your token from
 the OpenShift console:
 
 1. Open the OpenShift console for the gateway cluster
 2. Click your username (top right) → **Copy login command** → **Display Token**
 3. Copy the `oc login --token=sha256~... --server=...` command
-4. Run it in the DevSpaces terminal
+4. Run it in the Dev Spaces terminal
 
-For same-cluster, this replaces the default DevSpaces SA identity with
+For same-cluster, this replaces the default Dev Spaces SA identity with
 your user identity. For cross-cluster, use a separate kubeconfig.
 
 ## Same-cluster setup (simple)
 
-When DevSpaces and OGO are on the same OpenShift cluster, use the
+When Dev Spaces and OGO are on the same OpenShift cluster, use the
 cluster-internal gateway endpoint. No token exchange needed. Traffic
 is unencrypted on the pod network; clusters with a service mesh
 (Istio, etc.) handle encryption transparently.
@@ -99,12 +99,9 @@ exchange flow. This validates group membership.
 ### One-time setup
 
 ```bash
-# Login as your user (get token from OpenShift console → Copy login command)
-oc login --token=sha256~YOUR_TOKEN --server=https://api.YOUR-CLUSTER.example.com:6443
-
-# Verify you're logged in as your user (not a ServiceAccount)
+# Verify you're automatically logged in your Dev Spaces workspaces as user (not a ServiceAccount)
 oc whoami
-# Should show your username, not system:serviceaccount:...
+# IMPORTANT: Should show your username, not system:serviceaccount:...
 
 # Trust the system CA bundle
 export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
@@ -152,12 +149,12 @@ openshell sandbox create
 
 ## Cross-cluster setup
 
-When DevSpaces and OGO are on different OpenShift clusters. The gateway
-cluster's Routes must be network-reachable from the DevSpaces pod.
+When Dev Spaces and OGO are on different OpenShift clusters. The gateway
+cluster's Routes must be network-reachable from the Dev Spaces pod.
 
 ### Prerequisites
 
-- Network connectivity from DevSpaces to the gateway cluster's Routes
+- Network connectivity from Dev Spaces to the gateway cluster's Routes
 - An OpenShift account on the gateway cluster with `openshell-users` group
   membership
 
@@ -169,7 +166,7 @@ export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
 # Login to the gateway cluster with a separate kubeconfig
 # Get the token from the gateway cluster's OpenShift console → Copy login command
 # Note: --insecure-skip-tls-verify is needed when the remote cluster's API CA
-# is not in the DevSpaces pod's trust store. For production, add the CA instead:
+# is not in the Dev Spaces pod's trust store. For production, add the CA instead:
 #   cp remote-ca.crt /etc/pki/ca-trust/source/anchors/ && update-ca-trust
 KUBECONFIG=~/.kube/remote-cluster oc login \
   --token=sha256~YOUR_TOKEN \
@@ -247,7 +244,7 @@ oc login --token=sha256~YOUR_TOKEN --server=https://api.YOUR-CLUSTER.example.com
 ### "user system:serviceaccount:... is not a member of group"
 
 You're using a ServiceAccount token instead of your user token.
-DevSpaces pods default to the workspace SA. Get your user token from
+Dev Spaces pods default to the workspace SA. Get your user token from
 the OpenShift console (**Copy login command**) and re-login:
 
 ```bash
@@ -269,7 +266,7 @@ oc adm groups add-users openshell-users your-username
 
 The token is expired or from a different cluster than the auth-bridge.
 For cross-cluster, make sure you use a token from the **gateway cluster**,
-not the DevSpaces cluster.
+not the Dev Spaces cluster.
 
 ### TLS certificate errors
 
@@ -280,11 +277,11 @@ built-in bundle:
 export SSL_CERT_FILE=/etc/pki/tls/certs/ca-bundle.crt
 ```
 
-Add this to your `~/.bashrc` in the DevSpaces workspace for persistence.
+Add this to your `~/.bashrc` in the Dev Spaces workspace for persistence.
 
 ### curl hangs on token exchange
 
-The auth-bridge Route is not reachable from the DevSpaces pod. For
+The auth-bridge Route is not reachable from the Dev Spaces pod. For
 cross-cluster, verify network connectivity:
 
 ```bash
