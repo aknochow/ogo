@@ -3,6 +3,7 @@ resources:
 # Gateway
 - ogo_v1alpha1_openshellgateway.yaml
 # - ogo_v1alpha1_openshellgateway_dev.yaml
+# - ogo_v1alpha1_openshellgateway_seamless.yaml
 # Providers
 - ogo_v1alpha1_openshellprovider.yaml
 # - ogo_v1alpha1_openshellprovider_vertex.yaml
