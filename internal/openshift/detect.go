@@ -54,6 +54,7 @@ var (
 	isOpenShiftCache   cachedDetection
 	hasGatewayAPICache cachedDetection
 	hasGroupsAPICache  cachedDetection
+	hasOAuthAPICache   cachedDetection
 )
 
 // IsOpenShift checks whether the cluster has the route.openshift.io API group.
@@ -72,4 +73,11 @@ func HasGatewayAPI(dc discovery.DiscoveryInterface) bool {
 // Result is cached with TTL: 5 min positive, 30s negative.
 func HasGroupsAPI(dc discovery.DiscoveryInterface) bool {
 	return hasGroupsAPICache.check(dc, "user.openshift.io/v1")
+}
+
+// HasOAuthAPI checks whether the cluster has the oauth.openshift.io API.
+// MicroShift does not include the OAuth server.
+// Result is cached with TTL: 5 min positive, 30s negative.
+func HasOAuthAPI(dc discovery.DiscoveryInterface) bool {
+	return hasOAuthAPICache.check(dc, "oauth.openshift.io/v1")
 }

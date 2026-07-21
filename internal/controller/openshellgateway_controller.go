@@ -220,9 +220,11 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 				log.Error(err, "Failed to reconcile auth-bridge Route")
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "AuthBridgeRoute", err)
 			}
-			if err := r.reconcileOAuthClient(ctx, gw); err != nil {
-				log.Error(err, "Failed to reconcile OAuthClient")
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "OAuthClient", err)
+			if openshift.HasOAuthAPI(r.DiscoveryClient) {
+				if err := r.reconcileOAuthClient(ctx, gw); err != nil {
+					log.Error(err, "Failed to reconcile OAuthClient")
+					return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "OAuthClient", err)
+				}
 			}
 		}
 	}
