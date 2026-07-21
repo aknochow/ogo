@@ -9,6 +9,7 @@ rules:
   resources:
   - configmaps
   - namespaces
+  - persistentvolumeclaims
   - secrets
   - serviceaccounts
   - services
@@ -43,6 +44,17 @@ rules:
   verbs:
   - create
   - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - create
   - get
   - list
   - patch
@@ -93,6 +105,7 @@ rules:
 - apiGroups:
   - gateway.networking.k8s.io
   resources:
+  - gatewayclasses
   - gateways
   - grpcroutes
   verbs:
@@ -199,3 +212,13 @@ rules:
   - securitycontextconstraints
   verbs:
   - use
+- apiGroups:
+  - user.openshift.io
+  resources:
+  - groups
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch

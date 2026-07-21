@@ -77,11 +77,34 @@ type OpenShellGatewaySpec struct {
 }
 
 // DatabaseSpec configures the PostgreSQL database backend.
+// +kubebuilder:validation:XValidation:rule="!(self.embedded && size(self.secretName) > 0)",message="embedded and secretName are mutually exclusive"
 type DatabaseSpec struct {
+	// Embedded deploys a single-pod dev PostgreSQL in the gateway namespace.
+	// NOT for production use. Mutually exclusive with SecretName.
+	// +kubebuilder:default=false
+	Embedded bool `json:"embedded,omitempty"`
+
+	// EmbeddedConfig configures the embedded dev PostgreSQL.
+	// +optional
+	EmbeddedConfig *EmbeddedDatabaseConfig `json:"embeddedConfig,omitempty"`
+
 	// SecretName references a Secret containing the PostgreSQL connection URI.
 	// The Secret must have a key named "uri".
-	// +kubebuilder:validation:MinLength=1
-	SecretName string `json:"secretName"`
+	// When set, embedded PostgreSQL is not deployed.
+	// +optional
+	SecretName string `json:"secretName,omitempty"`
+}
+
+// EmbeddedDatabaseConfig configures the embedded dev PostgreSQL.
+type EmbeddedDatabaseConfig struct {
+	// StorageSize is the PVC size for PostgreSQL data.
+	// +kubebuilder:default="1Gi"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(Ki|Mi|Gi|Ti)$`
+	StorageSize string `json:"storageSize,omitempty"`
+
+	// Image is the PostgreSQL container image.
+	// +kubebuilder:default="registry.redhat.io/rhel9/postgresql-16:latest"
+	Image string `json:"image,omitempty"`
 }
 
 // SandboxSpec configures sandbox pod defaults.
@@ -170,6 +193,12 @@ type GatewayAPISpec struct {
 	// +kubebuilder:default="eg"
 	// +kubebuilder:validation:MaxLength=253
 	GatewayClassName string `json:"gatewayClassName,omitempty"`
+
+	// InstallEnvoyGateway auto-installs Envoy Gateway when no matching
+	// GatewayClass is found on the cluster. Set to false if Envoy Gateway
+	// is managed externally.
+	// +kubebuilder:default=true
+	InstallEnvoyGateway *bool `json:"installEnvoyGateway,omitempty"`
 }
 
 // AuthSpec configures gateway authentication.
@@ -206,6 +235,11 @@ type OpenShiftAuth struct {
 	// +kubebuilder:default="8h"
 	// +kubebuilder:validation:Pattern=`^[0-9]+(h|m|s)$`
 	TokenTTL string `json:"tokenTTL,omitempty"`
+
+	// AutoCreateGroups creates the OpenShift groups specified by userGroup
+	// and adminGroup if they don't already exist. Does not add users.
+	// +kubebuilder:default=true
+	AutoCreateGroups *bool `json:"autoCreateGroups,omitempty"`
 }
 
 // NetworkPolicySpec controls NetworkPolicy creation.
@@ -239,12 +273,15 @@ type OpenShellGatewayStatus struct {
 
 // Condition types for OpenShellGateway.
 const (
-	ConditionAvailable     = "Available"
-	ConditionProgressing   = "Progressing"
-	ConditionDegraded      = "Degraded"
-	ConditionSandboxCRD    = "SandboxCRDReady"
-	ConditionTLSReady      = "TLSReady"
-	ConditionDatabaseReady = "DatabaseReady"
+	ConditionAvailable          = "Available"
+	ConditionProgressing        = "Progressing"
+	ConditionDegraded           = "Degraded"
+	ConditionSandboxCRD         = "SandboxCRDReady"
+	ConditionTLSReady           = "TLSReady"
+	ConditionDatabaseReady      = "DatabaseReady"
+	ConditionEnvoyGatewayReady  = "EnvoyGatewayReady"
+	ConditionOpenShiftGroups    = "OpenShiftGroupsReady"
+	ConditionEnvoyProxySCCReady = "EnvoyProxySCCReady"
 )
 
 // Phase values for OpenShellGateway.

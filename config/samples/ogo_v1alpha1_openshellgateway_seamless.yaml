@@ -1,0 +1,48 @@
+# OpenShellGateway — seamless install (zero prerequisites)
+#
+# Deploy the operator and apply this CR — everything else is automated:
+#   make deploy IMG=quay.io/aknochow/ogo:main
+#   oc apply -f config/samples/ogo_v1alpha1_openshellgateway_seamless.yaml
+#
+# The operator will:
+#   - Install Envoy Gateway (if not already present)
+#   - Grant necessary SCCs for Envoy proxy pods
+#   - Deploy an embedded dev PostgreSQL (NOT for production)
+#   - Create OpenShift groups for RBAC
+#   - Configure TLS, Routes, and the auth-bridge
+#
+# For production, replace spec.database with an external PostgreSQL:
+#   database:
+#     secretName: my-pg-secret  # Secret with key "uri" containing the connection string
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellGateway
+metadata:
+  name: openshell
+spec:
+  namespace: ogo
+  replicas: 1
+  database:
+    embedded: true
+    embeddedConfig:
+      storageSize: "1Gi"
+  sandbox:
+    defaultImage: ghcr.io/nvidia/openshell-community/sandboxes/base:latest
+    workspaceStorageSize: "2Gi"
+  tls:
+    enabled: true
+    certManager:
+      enabled: true
+      issuerName: letsencrypt
+      issuerKind: ClusterIssuer
+  auth:
+    openshift:
+      userGroup: openshell-users
+      adminGroup: openshell-admins
+      autoCreateGroups: true
+  route:
+    hostname: openshell.apps.example.com
+    gatewayAPI:
+      enabled: true
+      gatewayClassName: eg
+      installEnvoyGateway: true
+  logLevel: info

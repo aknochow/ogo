@@ -88,8 +88,11 @@ type OpenShellGatewayReconciler struct {
 // +kubebuilder:rbac:groups=security.openshift.io,resources=securitycontextconstraints,verbs=use
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=oauth.openshift.io,resources=oauthclients,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;grpcroutes,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=user.openshift.io,resources=groups,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;grpcroutes;gatewayclasses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.envoyproxy.io,resources=backendtrafficpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch;create;update;patch
 
 func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
@@ -141,12 +144,26 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	log.Info("Reconciling OpenShellGateway", "namespace", ns, "sandbox_namespace", sandboxNS, "openshift", isOCP, "gatewayAPI", useGWAPI)
 
+	// Phase 1: Auto-provision dependencies
+	for _, dep := range r.dependencies() {
+		if !dep.Enabled(ctx, gw) {
+			continue
+		}
+		condition, err := dep.Reconcile(ctx, gw)
+		meta.SetStatusCondition(&gw.Status.Conditions, condition)
+		if err != nil {
+			log.Error(err, "Dependency reconcile failed", "dependency", dep.Name())
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, dep.Name(), err)
+		}
+	}
+
 	// Validate prerequisites before creating resources
 	if err := r.validateDatabaseSecret(ctx, gw); err != nil {
 		log.Error(err, "Database secret validation failed")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "DatabaseSecret", err)
 	}
 
+	// Phase 2: Core gateway resources
 	steps := []struct {
 		name string
 		fn   func(context.Context, *ogov1alpha1.OpenShellGateway) error
@@ -222,6 +239,14 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 	}
 
 	log.Info("Cleaning up gateway resources")
+
+	// Clean up dependencies in reverse order
+	deps := r.dependencies()
+	for i := len(deps) - 1; i >= 0; i-- {
+		if err := deps[i].Cleanup(ctx, gw); err != nil {
+			log.Error(err, "Failed to clean up dependency", "name", deps[i].Name())
+		}
+	}
 
 	ns := gatewayNamespace(gw)
 	sandboxNS := sandboxNamespace(gw)
@@ -306,17 +331,31 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 
 func (r *OpenShellGatewayReconciler) validateDatabaseSecret(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
 	ns := gatewayNamespace(gw)
+	secretName := databaseSecretName(gw)
+	if secretName == "" {
+		return fmt.Errorf("either spec.database.secretName or spec.database.embedded must be set")
+	}
 	secret := &corev1.Secret{}
-	if err := r.Get(ctx, types.NamespacedName{Name: gw.Spec.Database.SecretName, Namespace: ns}, secret); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, secret); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("database secret %q not found in namespace %q", gw.Spec.Database.SecretName, ns)
+			return fmt.Errorf("database secret %q not found in namespace %q", secretName, ns)
 		}
 		return fmt.Errorf("checking database secret: %w", err)
 	}
 	if _, ok := secret.Data["uri"]; !ok {
-		return fmt.Errorf("database secret %q missing required key \"uri\"", gw.Spec.Database.SecretName)
+		return fmt.Errorf("database secret %q missing required key \"uri\"", secretName)
 	}
 	return nil
+}
+
+func databaseSecretName(gw *ogov1alpha1.OpenShellGateway) string {
+	if gw.Spec.Database.SecretName != "" {
+		return gw.Spec.Database.SecretName
+	}
+	if gw.Spec.Database.Embedded {
+		return gw.Name + "-pg-uri"
+	}
+	return ""
 }
 
 // --- Namespace ---
@@ -687,7 +726,7 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 				Name: "OPENSHELL_DB_URL",
 				ValueFrom: &corev1.EnvVarSource{
 					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: gw.Spec.Database.SecretName},
+						LocalObjectReference: corev1.LocalObjectReference{Name: databaseSecretName(gw)},
 						Key:                  "uri",
 					},
 				},
@@ -1287,6 +1326,17 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		Reason: "OK", Message: "",
 	})
 
+	for _, condType := range []string{
+		ogov1alpha1.ConditionEnvoyGatewayReady,
+		ogov1alpha1.ConditionDatabaseReady,
+		ogov1alpha1.ConditionEnvoyProxySCCReady,
+		ogov1alpha1.ConditionOpenShiftGroups,
+	} {
+		if c := meta.FindStatusCondition(gw.Status.Conditions, condType); c != nil {
+			meta.SetStatusCondition(&latest.Status.Conditions, *c)
+		}
+	}
+
 	if gw.Spec.Route.Hostname != "" {
 		latest.Status.GatewayURL = "https://" + gw.Spec.Route.Hostname + ":443"
 	} else {
@@ -1315,6 +1365,17 @@ func (r *OpenShellGatewayReconciler) setDegraded(ctx context.Context, gw *ogov1a
 		log.Error(err, "Failed to update degraded status")
 	}
 	return reconcileErr
+}
+
+// --- Dependencies ---
+
+func (r *OpenShellGatewayReconciler) dependencies() []DependencyReconciler {
+	return []DependencyReconciler{
+		&EnvoyGatewayReconciler{Client: r.Client, DiscoveryClient: r.DiscoveryClient},
+		&EnvoyProxySCCReconciler{Client: r.Client, DiscoveryClient: r.DiscoveryClient},
+		&PostgreSQLReconciler{Client: r.Client},
+		&GroupsReconciler{Client: r.Client, DiscoveryClient: r.DiscoveryClient},
+	}
 }
 
 // --- Setup ---
