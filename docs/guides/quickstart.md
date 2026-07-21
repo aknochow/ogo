@@ -320,7 +320,7 @@ oc delete gatewayclass eg
 
 ## Next steps
 
-- [DevSpaces](devspaces.md) - create sandboxes from DevSpaces workspaces
+- [Dev Spaces](devspaces.md) - create sandboxes from Dev Spaces workspaces
 - [Envoy Gateway](envoy-gateway.md) - gRPC ingress architecture details
 - [OpenShift SSO](openshift-sso.md) - authentication and user groups
 - [Provider](../concepts/provider.md) - inject API keys into sandboxes

@@ -9,4 +9,4 @@ description: Step-by-step walkthroughs for deploying and configuring OGO.
 - [Quickstart](quickstart.md) - deploy OGO on OpenShift in 10 minutes
 - [Envoy Gateway](envoy-gateway.md) - gRPC ingress with Let's Encrypt TLS
 - [OpenShift SSO](openshift-sso.md) - "Log in with OpenShift" for the CLI
-- [DevSpaces](devspaces.md) - create sandboxes from DevSpaces workspaces
+- [Dev Spaces](devspaces.md) - create sandboxes from Dev Spaces workspaces
