@@ -1,142 +1,28 @@
 ---
 type: Guide
 title: Quickstart
-description: Deploy OGO on OpenShift and create your first sandbox in 10 minutes.
+description: Deploy OGO on OpenShift and create your first sandbox in under 5 minutes.
 tags: [getting-started]
 ---
 
 # Quickstart
 
-Deploy OGO on an OpenShift cluster with PostgreSQL and the OpenShell gateway.
+Deploy OGO on an OpenShift cluster. The operator handles everything:
+Envoy Gateway, PostgreSQL, TLS, RBAC groups, and Routes.
 
 ## Prerequisites
 
 - OpenShift 4.16+ cluster with `oc` CLI configured
 - `openshell` CLI installed (`brew install nvidia/tap/openshell`)
 
-## Choose a deployment path
-
-| Path | Auth | TLS | Prerequisites |
-|------|------|-----|---------------|
-| **[With Envoy Gateway](#with-envoy-gateway)** | OpenShift SSO (browser login) | Let's Encrypt via cert-manager | cert-manager, Envoy Gateway, Helm |
-| **[Without Envoy Gateway](#without-envoy-gateway)** | mTLS (client certificates) | Self-signed (operator-managed) | None |
-
-Envoy Gateway is required for OpenShift SSO because the OpenShell gateway
-needs the OIDC issuer on the same hostname as the gateway endpoint. Without
-Envoy, use mTLS client certificates or `port-forward` for access.
-
----
-
-## With Envoy Gateway
-
-This path gives you browser-based SSO login and Let's Encrypt TLS.
-
-### 1. Install cert-manager
-
-If not already installed:
+## 1. Deploy the operator
 
 ```bash
-oc apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.2/cert-manager.yaml
-oc wait --for=condition=Available deployment/cert-manager -n cert-manager --timeout=120s
-```
-
-Create a ClusterIssuer for Let's Encrypt (requires DNS challenge for wildcard
-certs, or HTTP challenge for single-host certs):
-
-```bash
-cat <<EOF | oc apply -f -
-apiVersion: cert-manager.io/v1
-kind: ClusterIssuer
-metadata:
-  name: letsencrypt
-spec:
-  acme:
-    server: https://acme-v02.api.letsencrypt.org/directory
-    email: your-email@example.com
-    privateKeySecretRef:
-      name: letsencrypt-key
-    solvers:
-    - http01:
-        ingress: {}
-EOF
-```
-
-### 2. Install Envoy Gateway
-
-The certgen pre-install hook runs as uid 65534, outside OpenShift's allowed
-UID range. Pre-create the namespace and service account, grant SCC, then
-install with the UID overridden.
- 
-IMPORTANT: On OpenShift 4.20+, Gateway API CRDs are managed by the Ingress Operator.
-Use `--skip-crds` to avoid conflicts. On 4.16-4.21, omit `--skip-crds`
-to let the Helm chart install the CRDs:
-
-```bash
-# 1. Pre-create namespace and certgen service account
-oc create namespace envoy-gateway-system
-oc create sa eg-gateway-helm-certgen -n envoy-gateway-system
-oc adm policy add-scc-to-user anyuid -z eg-gateway-helm-certgen -n envoy-gateway-system
-
-# 2. Install — override certgen UID so OpenShift assigns from the namespace range
-helm install eg oci://docker.io/envoyproxy/gateway-helm \
-  --version v1.3.2 -n envoy-gateway-system --skip-crds \
-  --set-json 'certgen.job.securityContext.runAsUser=null' \
-  --set-json 'certgen.job.securityContext.runAsGroup=null' \
-  --set-json 'certgen.job.securityContext.seccompProfile=null'
-
-# 3. Grant privileged SCC to the main controller service account
-oc adm policy add-scc-to-user privileged -z envoy-gateway -n envoy-gateway-system
-```
-
-Create the GatewayClass:
-
-```bash
-cat <<EOF | oc apply -f -
-apiVersion: gateway.networking.k8s.io/v1
-kind: GatewayClass
-metadata:
-  name: eg
-spec:
-  controllerName: gateway.envoyproxy.io/gatewayclass-controller
-EOF
-```
-
-Verify Envoy Gateway is ready:
-
-```bash
-oc get gatewayclasses
-# Should show: eg   ACCEPTED   True
-```
-
-### 3. Deploy the operator
-
-```bash
-make deploy IMG=quay.io/aknochow/ogo:main
+make deploy IMG=quay.io/aknochow/ogo:v0.2.0
 oc wait --for=condition=Available deployment/ogo-controller-manager -n ogo --timeout=120s
 ```
 
-### 4. Set up PostgreSQL
-
-```bash
-oc adm policy add-scc-to-user anyuid -z default -n ogo
-oc create deployment ogo-pg -n ogo --image=docker.io/library/postgres:16
-oc set env deployment/ogo-pg -n ogo \
-  POSTGRES_USER=openshell POSTGRES_PASSWORD=openshell POSTGRES_DB=openshell
-oc expose deployment/ogo-pg -n ogo --port=5432
-oc create secret generic ogo-pg -n ogo \
-  --from-literal=uri='postgresql://openshell:openshell@ogo-pg.ogo.svc:5432/openshell'
-```
-
-### 5. Create user groups
-
-```bash
-oc adm groups new openshell-users
-oc adm groups add-users openshell-users your-username
-oc adm groups new openshell-admins
-oc adm groups add-users openshell-admins your-username
-```
-
-### 6. Create the Gateway
+## 2. Create the gateway
 
 Replace `your-cluster.example.com` with your cluster's apps domain:
 
@@ -150,52 +36,52 @@ spec:
   namespace: ogo
   replicas: 1
   database:
-    secretName: ogo-pg
-  sandbox:
-    defaultImage: ghcr.io/nvidia/openshell-community/sandboxes/base:latest
-    workspaceStorageSize: "2Gi"
-    appArmorProfile: "Unconfined"
+    embedded: true
   tls:
-    enabled: false
+    enabled: true
     certManager:
+      enabled: true
       issuerName: letsencrypt
       issuerKind: ClusterIssuer
   route:
     hostname: openshell.apps.your-cluster.example.com
     gatewayAPI:
-      gatewayClassName: eg
+      enabled: true
   auth:
     openshift:
       userGroup: openshell-users
       adminGroup: openshell-admins
-      tokenTTL: "8h"
+      autoCreateGroups: true
   logLevel: info
-  networkPolicy:
-    enabled: true
 ```
 
 ```bash
 oc apply -f ogo-gateway.yaml
 ```
 
-Wait for the Envoy proxy to start. When Gateway API detects Envoy, it
-creates a dynamic ServiceAccount for the proxy. Grant it the privileged SCC:
+The operator will automatically:
+
+- Install Envoy Gateway and configure SCCs
+- Deploy an embedded dev PostgreSQL instance
+- Create the `openshell-users` and `openshell-admins` groups
+- Generate TLS certificates (self-signed, or via cert-manager if configured)
+- Create OpenShift Routes for the gateway and auth-bridge
+- Deploy the gateway with an auth-bridge sidecar for SSO
+
+Watch progress:
 
 ```bash
-# Find the Envoy proxy SA (created after the Gateway resource is reconciled)
-oc get sa -n envoy-gateway-system | grep envoy-ogo
-# Grant it privileged SCC
-oc adm policy add-scc-to-user privileged -z <envoy-sa-name> -n envoy-gateway-system
+oc get openshellgateway -w
+# Wait for Phase: Running
 ```
 
-Verify the gateway is running:
+## 3. Add yourself to the users group
 
 ```bash
-oc get openshellgateway
-# Should show: openshell   Running   https://openshell.apps.your-cluster.example.com:443
+oc adm groups add-users openshell-users $(oc whoami)
 ```
 
-### 7. Connect
+## 4. Connect
 
 ```bash
 openshell gateway add https://openshell.apps.your-cluster.example.com \
@@ -205,117 +91,43 @@ openshell gateway add https://openshell.apps.your-cluster.example.com \
 openshell sandbox create --gateway my-cluster
 ```
 
----
+## Production considerations
 
-## Without Envoy Gateway
+The quickstart uses an embedded single-pod PostgreSQL that is **not suitable
+for production**. For production deployments:
 
-This path uses self-signed TLS with a passthrough OpenShift Route. No
-external prerequisites. Authentication uses mTLS client certificates.
+1. **Use an external database** — deploy CloudNativePG, Amazon RDS, or any
+   PostgreSQL 14+ instance, then reference it with `spec.database.secretName`
+   instead of `embedded: true`:
 
-### 1. Deploy the operator
+   ```yaml
+   database:
+     secretName: my-pg-secret  # Secret with key "uri"
+   ```
 
-```bash
-make deploy IMG=quay.io/aknochow/ogo:main
-oc wait --for=condition=Available deployment/ogo-controller-manager -n ogo --timeout=120s
-```
+2. **Use cert-manager for TLS** — install cert-manager with a Let's Encrypt
+   ClusterIssuer for trusted certificates. The operator integrates with
+   cert-manager when `spec.tls.certManager.enabled: true`.
 
-### 2. Set up PostgreSQL
-
-```bash
-oc create deployment ogo-pg -n ogo --image=docker.io/library/postgres:16
-oc set env deployment/ogo-pg -n ogo \
-  POSTGRES_USER=openshell POSTGRES_PASSWORD=openshell POSTGRES_DB=openshell
-oc expose deployment/ogo-pg -n ogo --port=5432
-oc adm policy add-scc-to-user anyuid -z default -n ogo
-oc create secret generic ogo-pg -n ogo \
-  --from-literal=uri='postgresql://openshell:openshell@ogo-pg.ogo.svc:5432/openshell'
-```
-
-### 3. Create the Gateway
-
-```yaml
-# ogo-gateway.yaml
-apiVersion: gateway.ogo.aknochow.io/v1alpha1
-kind: OpenShellGateway
-metadata:
-  name: openshell
-spec:
-  namespace: ogo
-  replicas: 1
-  database:
-    secretName: ogo-pg
-  sandbox:
-    defaultImage: ghcr.io/nvidia/openshell-community/sandboxes/base:latest
-    workspaceStorageSize: "2Gi"
-  tls:
-    enabled: true
-  route:
-    hostname: openshell.apps.your-cluster.example.com
-    gatewayAPI:
-      enabled: false
-  auth:
-    openshift:
-      enabled: false
-      userGroup: openshell-users
-  logLevel: info
-  networkPolicy:
-    enabled: false
-```
-
-```bash
-oc apply -f ogo-gateway.yaml
-```
-
-Verify:
-
-```bash
-oc get openshellgateway
-oc get route -n ogo
-# Should show a passthrough Route
-```
-
-### 4. Connect
-
-```bash
-openshell gateway add https://openshell.apps.your-cluster.example.com \
-  --name my-cluster --gateway-insecure
-
-openshell sandbox create --gateway my-cluster
-```
-
-The `--gateway-insecure` flag is needed because the self-signed TLS
-certificate is not trusted by the CLI. For production, use the Envoy
-Gateway path with Let's Encrypt certificates.
-
----
+3. **Pre-create groups** — for auditing, create groups and add members before
+   deploying the gateway. Set `autoCreateGroups: false` if your groups already
+   exist.
 
 ## Teardown
 
-To completely remove OGO from the cluster:
-
 ```bash
-# 1. Delete the gateway CR (triggers finalizer cleanup of all resources)
+# Delete the gateway (triggers finalizer cleanup)
 oc delete openshellgateway openshell
 
-# 2. Delete the database
-oc delete deployment ogo-pg -n ogo
-oc delete svc ogo-pg -n ogo
-oc delete secret ogo-pg -n ogo
-
-# 3. Undeploy the operator, CRDs, and RBAC
+# Undeploy the operator, CRDs, and RBAC
 make undeploy
 
-# 4. Clean up cluster-scoped resources
+# Clean up cluster-scoped resources
 oc delete oauthclient openshell 2>/dev/null
 oc delete groups openshell-users openshell-admins 2>/dev/null
 
-# 5. Delete the namespace
+# Delete the namespace
 oc delete ns ogo
-
-# 6. (If using Envoy Gateway) Remove Envoy Gateway
-helm uninstall eg -n envoy-gateway-system
-oc delete ns envoy-gateway-system
-oc delete gatewayclass eg
 ```
 
 ## Next steps
