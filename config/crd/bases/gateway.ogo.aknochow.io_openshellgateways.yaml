@@ -130,7 +130,8 @@ spec:
                 type: object
                 x-kubernetes-validations:
                 - message: embedded and secretName are mutually exclusive
-                  rule: '!(self.embedded && size(self.secretName) > 0)'
+                  rule: '!(self.embedded && has(self.secretName) && size(self.secretName)
+                    > 0)'
               image:
                 default: ghcr.io/nvidia/openshell/gateway
                 description: Image is the gateway container image.
