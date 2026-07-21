@@ -1326,8 +1326,15 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		Reason: "OK", Message: "",
 	})
 
-	for _, c := range gw.Status.Conditions {
-		meta.SetStatusCondition(&latest.Status.Conditions, c)
+	for _, condType := range []string{
+		ogov1alpha1.ConditionEnvoyGatewayReady,
+		ogov1alpha1.ConditionDatabaseReady,
+		ogov1alpha1.ConditionEnvoyProxySCCReady,
+		ogov1alpha1.ConditionOpenShiftGroups,
+	} {
+		if c := meta.FindStatusCondition(gw.Status.Conditions, condType); c != nil {
+			meta.SetStatusCondition(&latest.Status.Conditions, *c)
+		}
 	}
 
 	if gw.Spec.Route.Hostname != "" {

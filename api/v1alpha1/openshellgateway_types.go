@@ -77,7 +77,7 @@ type OpenShellGatewaySpec struct {
 }
 
 // DatabaseSpec configures the PostgreSQL database backend.
-// +kubebuilder:validation:XValidation:rule="!(self.embedded && self.secretName != ”)",message="embedded and secretName are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!(self.embedded && size(self.secretName) > 0)",message="embedded and secretName are mutually exclusive"
 type DatabaseSpec struct {
 	// Embedded deploys a single-pod dev PostgreSQL in the gateway namespace.
 	// NOT for production use. Mutually exclusive with SecretName.
