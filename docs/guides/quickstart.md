@@ -121,13 +121,6 @@ oc delete openshellgateway openshell
 
 # Undeploy the operator, CRDs, and RBAC
 make undeploy
-
-# Clean up cluster-scoped resources
-oc delete oauthclient openshell 2>/dev/null
-oc delete groups openshell-users openshell-admins 2>/dev/null
-
-# Delete the namespace
-oc delete ns ogo
 ```
 
 ## Next steps
