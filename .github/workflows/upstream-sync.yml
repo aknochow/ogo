@@ -10,6 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      pull-requests: write
 
     steps:
       - name: Checkout
@@ -22,6 +23,11 @@ jobs:
         id: check
         run: |
           LATEST=$(curl -s https://api.github.com/repos/NVIDIA/OpenShell/releases/latest | jq -r .tag_name)
+          if [ -z "${LATEST}" ] || [ "${LATEST}" = "null" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Failed to fetch upstream OpenShell version"
+            exit 0
+          fi
           CURRENT=$(grep -oP 'OpenShell-v\K[\d.]+' docs.toml | head -1)
           echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
           echo "latest_version=${LATEST#v}" >> "$GITHUB_OUTPUT"
@@ -55,18 +61,23 @@ jobs:
           echo "base=${BASE}" >> "$GITHUB_OUTPUT"
           echo "Release tag: ${NEW_TAG}"
 
-      - name: Commit and tag
+      - name: Create PR for version bump
         if: steps.check.outputs.changed == 'true'
         env:
           NEW_TAG: ${{ steps.tag.outputs.tag }}
           OPENSHELL_VERSION: ${{ steps.check.outputs.latest }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          BRANCH="chore/sync-openshell-${OPENSHELL_VERSION}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "${BRANCH}"
           git add -A
           git diff --cached --quiet && exit 0
 
-          git commit -m "chore: sync OpenShell ${OPENSHELL_VERSION}, tag ${NEW_TAG}"
-          git push origin main || exit 1
-          git tag "${NEW_TAG}"
-          git push origin "${NEW_TAG}"
+          git commit -m "chore: sync OpenShell ${OPENSHELL_VERSION}"
+          git push origin "${BRANCH}"
+          gh pr create \
+            --title "chore: sync OpenShell ${OPENSHELL_VERSION}" \
+            --body "Automated upstream sync: OpenShell ${OPENSHELL_VERSION}. Release tag \`${NEW_TAG}\` will be created after merge." \
+            --base main --head "${BRANCH}"
