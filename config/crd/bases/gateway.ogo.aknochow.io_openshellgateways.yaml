@@ -137,6 +137,7 @@ spec:
                 description: Image is the gateway container image.
                 type: string
               imageTag:
+                default: v0.0.86
                 description: ImageTag overrides the default image tag for gateway
                   and supervisor containers.
                 type: string

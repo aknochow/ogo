@@ -35,6 +35,7 @@ type OpenShellGatewaySpec struct {
 	Image string `json:"image,omitempty"`
 
 	// ImageTag overrides the default image tag for gateway and supervisor containers.
+	// +kubebuilder:default="v0.0.86"
 	ImageTag string `json:"imageTag,omitempty"`
 	// TODO(aknochow): split into separate GatewayImageTag / SupervisorImageTag —
 	// shared tag causes pull failures when overriding only the gateway image.
