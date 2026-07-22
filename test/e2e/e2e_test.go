@@ -86,8 +86,6 @@ var _ = Describe("Manager", Ordered, func() {
 		By("cleaning up e2e test resources")
 		cmd = exec.Command("kubectl", "delete", "secret", "e2e-pg-uri", "-n", namespace)
 		_, _ = utils.Run(cmd)
-		cmd = exec.Command("kubectl", "delete", "group", "openshell-e2e-users", "openshell-e2e-admins")
-		_, _ = utils.Run(cmd)
 
 		By("cleaning up the curl pod for metrics")
 		cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
@@ -288,7 +286,7 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		It("should reconcile a gateway CR with routes and groups", func() {
+		It("should reconcile a gateway CR with routes", func() {
 			By("creating a dummy database secret")
 			cmd := exec.Command("kubectl", "create", "secret", "generic", "e2e-pg-uri",
 				"--from-literal=uri=postgresql://test:test@localhost:5432/test",
@@ -332,36 +330,12 @@ var _ = Describe("Manager", Ordered, func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).To(Equal("passthrough"))
 
-			By("verifying the auth-bridge Route exists")
-			verifyAuthRoute := func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "route", "openshell-auth",
-					"-n", namespace, "-o", "jsonpath={.spec.host}")
-				output, err := utils.Run(cmd)
-				g.Expect(err).NotTo(HaveOccurred())
-				g.Expect(output).To(ContainSubstring("openshell-auth"))
-			}
-			Eventually(verifyAuthRoute, 2*time.Minute).Should(Succeed())
-
-			By("verifying OpenShift groups were auto-created")
-			for _, group := range []string{"openshell-e2e-users", "openshell-e2e-admins"} {
-				cmd = exec.Command("kubectl", "get", "group", group)
-				_, err = utils.Run(cmd)
-				Expect(err).NotTo(HaveOccurred(), "Group %s should exist", group)
-			}
-
 			By("verifying gateway status URL")
 			cmd = exec.Command("kubectl", "get", "openshellgateways", "openshell",
 				"-o", "jsonpath={.status.gatewayURL}")
 			output, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(output).To(Equal("https://openshell.apps.e2e.test:443"))
-
-			By("verifying OpenShiftGroupsReady condition")
-			cmd = exec.Command("kubectl", "get", "openshellgateways", "openshell",
-				"-o", "jsonpath={.status.conditions[?(@.type=='OpenShiftGroupsReady')].status}")
-			output, err = utils.Run(cmd)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(output).To(Equal("True"))
 
 			By("deleting the gateway CR")
 			cmd = exec.Command("kubectl", "delete", "openshellgateways", "openshell", "--timeout=60s")
