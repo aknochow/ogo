@@ -264,6 +264,23 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-sandbox-scc-privileged"}})
 	}
 
+	{ // Direct Route cleanup (non-Gateway-API path)
+		directRoute := &unstructured.Unstructured{}
+		directRoute.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+		directRoute.SetName(gw.Name)
+		directRoute.SetNamespace(ns)
+		if err := r.Delete(ctx, directRoute); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
+			log.Error(err, "Failed to delete direct Route")
+		}
+		authRoute := &unstructured.Unstructured{}
+		authRoute.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+		authRoute.SetName(gw.Name + "-auth")
+		authRoute.SetNamespace(ns)
+		if err := r.Delete(ctx, authRoute); err != nil && !apierrors.IsNotFound(err) && !isNoKindMatch(err) {
+			log.Error(err, "Failed to delete auth-bridge Route")
+		}
+	}
+
 	{ // Gateway API cleanup — attempt unconditionally; NotFound is expected if CRDs absent
 		for _, gvk := range []schema.GroupVersionKind{
 			{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway"},
@@ -1368,6 +1385,11 @@ func (r *OpenShellGatewayReconciler) setDegraded(ctx context.Context, gw *ogov1a
 		log.Error(err, "Failed to update degraded status")
 	}
 	return reconcileErr
+}
+
+func isNoKindMatch(err error) bool {
+	_, ok := err.(*meta.NoKindMatchError)
+	return ok
 }
 
 // --- Dependencies ---
