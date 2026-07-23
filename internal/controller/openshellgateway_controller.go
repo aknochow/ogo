@@ -75,6 +75,7 @@ type OpenShellGatewayReconciler struct {
 // +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellgateways/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellgateways/finalizers,verbs=update
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=services;serviceaccounts;configmaps;secrets;namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=nodes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=core,resources=events,verbs=get;list;watch
