@@ -121,6 +121,9 @@ oc delete openshellgateway openshell
 
 # Undeploy the operator, CRDs, and RBAC
 make undeploy
+
+# Remove Envoy Gateway namespace
+oc delete ns envoy-gateway-system
 ```
 
 ## Next steps

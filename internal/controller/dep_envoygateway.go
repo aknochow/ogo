@@ -186,6 +186,11 @@ func (e *EnvoyGatewayReconciler) applyManifests(ctx context.Context, data []byte
 				log.V(1).Info("CRD already exists, skipping", "name", obj.GetName())
 				continue
 			}
+			// Jobs are immutable - skip if already exists
+			if existing.GetKind() == "Job" {
+				log.V(1).Info("Job already exists, skipping", "name", obj.GetName())
+				continue
+			}
 			obj.SetResourceVersion(existing.GetResourceVersion())
 			if err := e.Update(ctx, obj); err != nil {
 				return fmt.Errorf("updating %s/%s: %w", obj.GetKind(), obj.GetName(), err)
@@ -215,7 +220,7 @@ func (e *EnvoyGatewayReconciler) grantOpenShiftSCCs(ctx context.Context, gw *ogo
 	}{
 		{
 			name:      "envoy-gateway-certgen-anyuid",
-			sa:        "envoy-gateway-certgen",
+			sa:        "eg-gateway-helm-certgen",
 			namespace: "envoy-gateway-system",
 			scc:       "anyuid",
 		},

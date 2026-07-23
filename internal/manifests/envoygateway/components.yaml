@@ -541,6 +541,9 @@ spec:
   backoffLimit: 1
   completions: 1
   parallelism: 1
+  selector:
+    matchLabels:
+      app: certgen
   template:
     metadata:
       labels:
