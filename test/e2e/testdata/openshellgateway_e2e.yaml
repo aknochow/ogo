@@ -1,0 +1,26 @@
+# OpenShellGateway — E2E test CR for MINC (MicroShift)
+#
+# Tailored for MINC (MicroShift): no cert-manager, no Gateway API,
+# no OAuth, no Groups API, no RHEL registry.
+# Uses a pre-created dummy database secret and self-signed TLS.
+# Tests: route creation and core resource reconciliation.
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellGateway
+metadata:
+  name: openshell
+spec:
+  namespace: ogo
+  replicas: 1
+  database:
+    secretName: e2e-pg-uri
+  tls:
+    enabled: true
+  auth:
+    openshift:
+      enabled: false
+      userGroup: openshell-e2e-users
+  route:
+    hostname: openshell.apps.e2e.test
+    gatewayAPI:
+      enabled: false
+  logLevel: debug

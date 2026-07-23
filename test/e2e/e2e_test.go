@@ -79,8 +79,16 @@ var _ = Describe("Manager", Ordered, func() {
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
 	// and deleting the namespace.
 	AfterAll(func() {
+		By("cleaning up gateway CR if still present")
+		cmd := exec.Command("kubectl", "delete", "openshellgateways", "openshell", "--timeout=30s")
+		_, _ = utils.Run(cmd)
+
+		By("cleaning up e2e test resources")
+		cmd = exec.Command("kubectl", "delete", "secret", "e2e-pg-uri", "-n", namespace)
+		_, _ = utils.Run(cmd)
+
 		By("cleaning up the curl pod for metrics")
-		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
+		cmd = exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
@@ -117,6 +125,21 @@ var _ = Describe("Manager", Ordered, func() {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Kubernetes events:\n%s", eventsOutput)
 			} else {
 				_, _ = fmt.Fprintf(GinkgoWriter, "Failed to get Kubernetes events: %s", err)
+			}
+
+			By("Fetching gateway CR status")
+			cmd = exec.Command("kubectl", "get", "openshellgateways", "openshell",
+				"-o", "yaml")
+			gwOutput, err := utils.Run(cmd)
+			if err == nil {
+				_, _ = fmt.Fprintf(GinkgoWriter, "Gateway CR:\n%s", gwOutput)
+			}
+
+			By("Fetching routes")
+			cmd = exec.Command("kubectl", "get", "routes", "-n", namespace, "-o", "wide")
+			routeOutput, err := utils.Run(cmd)
+			if err == nil {
+				_, _ = fmt.Fprintf(GinkgoWriter, "Routes:\n%s", routeOutput)
 			}
 
 			By("Fetching curl-metrics logs")
@@ -263,14 +286,70 @@ var _ = Describe("Manager", Ordered, func() {
 
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
-		// TODO: Customize the e2e test suite with scenarios specific to your project.
-		// Consider applying sample/CR(s) and check their status and/or verifying
-		// the reconciliation by using the metrics, i.e.:
-		// metricsOutput := getMetricsOutput()
-		// Expect(metricsOutput).To(ContainSubstring(
-		//    fmt.Sprintf(`controller_runtime_reconcile_total{controller="%s",result="success"} 1`,
-		//    strings.ToLower(<Kind>),
-		// ))
+		It("should reconcile a gateway CR with routes", func() {
+			By("creating a dummy database secret")
+			cmd := exec.Command("kubectl", "create", "secret", "generic", "e2e-pg-uri",
+				"--from-literal=uri=postgresql://test:test@localhost:5432/test",
+				"-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to create dummy database secret")
+
+			By("applying the e2e gateway CR")
+			cmd = exec.Command("kubectl", "apply", "-f",
+				filepath.Join("test", "e2e", "testdata", "openshellgateway_e2e.yaml"))
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply gateway CR")
+
+			By("waiting for the gateway to start reconciling")
+			verifyGatewayReconciling := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "openshellgateways", "openshell",
+					"-o", "jsonpath={.status.phase}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(SatisfyAny(
+					Equal("Creating"),
+					Equal("Running"),
+				), "Gateway should be reconciling")
+			}
+			Eventually(verifyGatewayReconciling, 3*time.Minute).Should(Succeed())
+
+			By("verifying the gateway Route exists with correct host")
+			verifyRoute := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "route", "openshell",
+					"-n", namespace, "-o", "jsonpath={.spec.host}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal("openshell.apps.e2e.test"))
+			}
+			Eventually(verifyRoute, 2*time.Minute).Should(Succeed())
+
+			By("verifying the Route has passthrough TLS termination")
+			cmd = exec.Command("kubectl", "get", "route", "openshell",
+				"-n", namespace, "-o", "jsonpath={.spec.tls.termination}")
+			output, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).To(Equal("passthrough"))
+
+			By("verifying gateway status URL")
+			cmd = exec.Command("kubectl", "get", "openshellgateways", "openshell",
+				"-o", "jsonpath={.status.gatewayURL}")
+			output, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(output).To(Equal("https://openshell.apps.e2e.test:443"))
+
+			By("deleting the gateway CR")
+			cmd = exec.Command("kubectl", "delete", "openshellgateways", "openshell", "--timeout=60s")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the Route is cleaned up")
+			verifyRouteGone := func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "route", "openshell", "-n", namespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred(), "Route should be deleted")
+			}
+			Eventually(verifyRouteGone, time.Minute).Should(Succeed())
+		})
 	})
 })
 
