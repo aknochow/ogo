@@ -186,11 +186,20 @@ func (e *EnvoyGatewayReconciler) applyManifests(ctx context.Context, data []byte
 				log.V(1).Info("CRD already exists, skipping", "name", obj.GetName())
 				continue
 			}
-			obj.SetResourceVersion(existing.GetResourceVersion())
-			if err := e.Update(ctx, obj); err != nil {
-				return fmt.Errorf("updating %s/%s: %w", obj.GetKind(), obj.GetName(), err)
+			// Jobs are immutable - delete and recreate instead of updating
+			if existing.GetKind() == "Job" {
+				log.Info("Deleting existing Job for recreation", "name", obj.GetName())
+				if err := e.Delete(ctx, existing); err != nil && !errors.IsNotFound(err) {
+					return fmt.Errorf("deleting Job %s for recreation: %w", obj.GetName(), err)
+				}
+				// Fall through to create the new Job
+			} else {
+				obj.SetResourceVersion(existing.GetResourceVersion())
+				if err := e.Update(ctx, obj); err != nil {
+					return fmt.Errorf("updating %s/%s: %w", obj.GetKind(), obj.GetName(), err)
+				}
+				continue
 			}
-			continue
 		}
 		if err := e.Create(ctx, obj); err != nil {
 			if errors.IsAlreadyExists(err) {
