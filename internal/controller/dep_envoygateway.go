@@ -224,7 +224,7 @@ func (e *EnvoyGatewayReconciler) grantOpenShiftSCCs(ctx context.Context, gw *ogo
 	}{
 		{
 			name:      "envoy-gateway-certgen-anyuid",
-			sa:        "envoy-gateway-certgen",
+			sa:        "eg-gateway-helm-certgen",
 			namespace: "envoy-gateway-system",
 			scc:       "anyuid",
 		},
