@@ -110,6 +110,13 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 		}, err
 	}
 
+	if err := e.ensureGatewayClass(ctx, gw); err != nil {
+		return metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
+			Reason: "GatewayClassFailed", Message: fmt.Sprintf("Failed to create GatewayClass: %v", err),
+		}, err
+	}
+
 	if isOCP {
 		if err := e.grantOpenShiftSCCs(ctx, gw); err != nil {
 			return metav1.Condition{
@@ -124,6 +131,24 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 		Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionTrue,
 		Reason: "Installed", Message: fmt.Sprintf("Envoy Gateway %s installed by OGO", envoygateway.Version),
 	}, nil
+}
+
+func (e *EnvoyGatewayReconciler) ensureGatewayClass(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	gcName := gatewayClassName(gw)
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(gatewayClassGVK)
+	if err := e.Get(ctx, types.NamespacedName{Name: gcName}, existing); err == nil {
+		return nil
+	}
+
+	gc := &unstructured.Unstructured{}
+	gc.SetGroupVersionKind(gatewayClassGVK)
+	gc.SetName(gcName)
+	gc.SetLabels(ownershipLabels(componentEnvoyGateway, gw))
+	gc.Object["spec"] = map[string]interface{}{
+		"controllerName": "gateway.envoyproxy.io/gatewayclass-controller",
+	}
+	return e.Create(ctx, gc)
 }
 
 func (e *EnvoyGatewayReconciler) Cleanup(ctx context.Context, _ *ogov1alpha1.OpenShellGateway) error {
