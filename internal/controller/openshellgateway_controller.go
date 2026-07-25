@@ -1050,9 +1050,12 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw
 		return fmt.Errorf("route.hostname is required when using Gateway API")
 	}
 
-	tlsSecretName := gw.Name + "-gateway-tls"
-	if err := r.reconcileGatewayTLSCert(ctx, gw, tlsSecretName, hostname); err != nil {
-		return fmt.Errorf("reconciling gateway TLS certificate: %w", err)
+	tlsSecretName := gw.Name + "-server-tls"
+	if gw.Spec.TLS.CertManager.Enabled {
+		tlsSecretName = gw.Name + "-gateway-tls"
+		if err := r.reconcileGatewayTLSCert(ctx, gw, tlsSecretName, hostname); err != nil {
+			return fmt.Errorf("reconciling gateway TLS certificate: %w", err)
+		}
 	}
 
 	gwGVK := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway"}
