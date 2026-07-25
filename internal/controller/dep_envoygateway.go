@@ -182,8 +182,8 @@ func (e *EnvoyGatewayReconciler) applyManifests(ctx context.Context, data []byte
 		existing := obj.DeepCopy()
 		key := types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
 		if err := e.Get(ctx, key, existing); err == nil {
-			if existing.GetKind() == "CustomResourceDefinition" {
-				log.V(1).Info("CRD already exists, skipping", "name", obj.GetName())
+			if existing.GetKind() == "CustomResourceDefinition" || existing.GetKind() == "Job" {
+				log.V(1).Info("Immutable resource already exists, skipping", "kind", obj.GetKind(), "name", obj.GetName())
 				continue
 			}
 			obj.SetResourceVersion(existing.GetResourceVersion())
@@ -215,7 +215,7 @@ func (e *EnvoyGatewayReconciler) grantOpenShiftSCCs(ctx context.Context, gw *ogo
 	}{
 		{
 			name:      "envoy-gateway-certgen-anyuid",
-			sa:        "envoy-gateway-certgen",
+			sa:        "eg-gateway-helm-certgen",
 			namespace: "envoy-gateway-system",
 			scc:       "anyuid",
 		},
