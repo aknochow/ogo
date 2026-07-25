@@ -219,6 +219,12 @@ func (e *EnvoyGatewayReconciler) grantOpenShiftSCCs(ctx context.Context, gw *ogo
 			namespace: "envoy-gateway-system",
 			scc:       "anyuid",
 		},
+		{
+			name:      "envoy-gateway-anyuid",
+			sa:        "envoy-gateway",
+			namespace: "envoy-gateway-system",
+			scc:       "anyuid",
+		},
 	}
 
 	for _, b := range sccBindings {

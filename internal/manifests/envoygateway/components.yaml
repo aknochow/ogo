@@ -437,11 +437,7 @@ spec:
             drop:
             - ALL
           privileged: false
-          runAsGroup: 65532
           runAsNonRoot: true
-          runAsUser: 65532
-          seccompProfile:
-            type: RuntimeDefault
         volumeMounts:
         - mountPath: /config
           name: envoy-gateway-config
@@ -568,11 +564,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
-          runAsGroup: 65534
           runAsNonRoot: true
-          runAsUser: 65534
-          seccompProfile:
-            type: RuntimeDefault
       imagePullSecrets: []
       restartPolicy: Never
       serviceAccountName: eg-gateway-helm-certgen
