@@ -1396,6 +1396,7 @@ func isNoKindMatch(err error) bool {
 
 func (r *OpenShellGatewayReconciler) dependencies() []DependencyReconciler {
 	return []DependencyReconciler{
+		&SandboxCRDReconciler{Client: r.Client},
 		&EnvoyGatewayReconciler{Client: r.Client, DiscoveryClient: r.DiscoveryClient},
 		&EnvoyProxySCCReconciler{Client: r.Client, DiscoveryClient: r.DiscoveryClient},
 		&PostgreSQLReconciler{Client: r.Client},
