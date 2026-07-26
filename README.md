@@ -73,6 +73,64 @@ Ready-to-use configurations.
 - [Claude Code + Vertex AI](docs/examples/vertex-ai.md) - Google Vertex AI inference
 - [Developer Policy](docs/examples/developer-policy.md) - GitHub, PyPI, npm access
 
+## Container Images
+
+| Image | Description |
+|-------|-------------|
+| [quay.io/aknochow/ogo](https://quay.io/repository/aknochow/ogo) | Operator |
+| [quay.io/aknochow/ogo-auth-bridge](https://quay.io/repository/aknochow/ogo-auth-bridge) | Auth bridge sidecar |
+| [quay.io/aknochow/ogo-bundle](https://quay.io/repository/aknochow/ogo-bundle) | OLM bundle |
+| [quay.io/aknochow/ogo-catalog](https://quay.io/repository/aknochow/ogo-catalog) | OLM catalog |
+
+All images are built on every push to `main` and tagged `:main`.
+Release tags (e.g. `:v0.2.0`) are created by the release workflow.
+
+## Install via OLM
+
+To install using the Operator Lifecycle Manager (before OperatorHub publication):
+
+```bash
+# Create the catalog source
+oc apply -f - <<EOF
+apiVersion: operators.coreos.com/v1alpha1
+kind: CatalogSource
+metadata:
+  name: ogo-catalog
+  namespace: openshift-marketplace
+spec:
+  sourceType: grpc
+  image: quay.io/aknochow/ogo-catalog:main
+  displayName: OGO Catalog
+  publisher: aknochow
+EOF
+
+# Create the operator namespace and operator group
+oc create ns ogo
+oc apply -f - <<EOF
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: ogo
+  namespace: ogo
+spec:
+  targetNamespaces: []
+EOF
+
+# Subscribe to the operator
+oc apply -f - <<EOF
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ogo
+  namespace: ogo
+spec:
+  channel: alpha
+  name: ogo
+  source: ogo-catalog
+  sourceNamespace: openshift-marketplace
+EOF
+```
+
 ## Development
 
 ```bash
