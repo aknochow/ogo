@@ -130,7 +130,7 @@ metadata:
         }
       ]
     capabilities: Full Lifecycle
-    createdAt: "2026-06-30T13:54:40Z"
+    createdAt: "2026-07-26T00:43:26Z"
     operators.operatorframework.io/builder: operator-sdk-v1.42.0
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: ogo.v0.1.0
@@ -197,6 +197,7 @@ spec:
           resources:
           - configmaps
           - namespaces
+          - persistentvolumeclaims
           - secrets
           - serviceaccounts
           - services
@@ -237,6 +238,17 @@ spec:
           - update
           - watch
         - apiGroups:
+          - apiextensions.k8s.io
+          resources:
+          - customresourcedefinitions
+          verbs:
+          - create
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
           - apps
           resources:
           - deployments
@@ -255,6 +267,18 @@ spec:
           verbs:
           - create
         - apiGroups:
+          - batch
+          resources:
+          - jobs
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
           - cert-manager.io
           resources:
           - certificates
@@ -267,8 +291,21 @@ spec:
           - update
           - watch
         - apiGroups:
+          - gateway.envoyproxy.io
+          resources:
+          - backendtrafficpolicies
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
           - gateway.networking.k8s.io
           resources:
+          - gatewayclasses
           - gateways
           - grpcroutes
           verbs:
@@ -343,8 +380,10 @@ spec:
           - rolebindings
           - roles
           verbs:
+          - bind
           - create
           - delete
+          - escalate
           - get
           - list
           - patch
@@ -375,6 +414,16 @@ spec:
           - securitycontextconstraints
           verbs:
           - use
+        - apiGroups:
+          - user.openshift.io
+          resources:
+          - groups
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - watch
         - apiGroups:
           - authentication.k8s.io
           resources:
@@ -416,7 +465,8 @@ spec:
                 - --health-probe-bind-address=:8081
                 command:
                 - /manager
-                image: quay.io/aknochow/ogo:0.1.0-20260630094427
+                image: quay.io/aknochow/ogo:main
+                imagePullPolicy: Always
                 livenessProbe:
                   httpGet:
                     path: /healthz
