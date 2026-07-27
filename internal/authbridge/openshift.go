@@ -142,9 +142,70 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string) (
 		return nil, fmt.Errorf("decoding user info: %w", err)
 	}
 
-	return &UserInfo{
+	info := &UserInfo{
 		Name:   raw.Metadata.Name,
 		UID:    raw.Metadata.UID,
 		Groups: raw.Groups,
-	}, nil
+	}
+
+	if strings.HasPrefix(info.Name, "system:serviceaccount:") {
+		extraGroups, err := c.getGroupMemberships(ctx, accessToken, info.Name)
+		if err == nil {
+			info.Groups = append(info.Groups, extraGroups...)
+		}
+	}
+
+	return info, nil
+}
+
+func (c *OpenShiftClient) getGroupMemberships(ctx context.Context, _ string, username string) ([]string, error) {
+	apiURL := os.Getenv("KUBERNETES_API_URL")
+	if apiURL == "" {
+		apiURL = "https://kubernetes.default.svc:443"
+	}
+	apiURL = strings.TrimRight(apiURL, "/")
+
+	saToken, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	if err != nil {
+		return nil, fmt.Errorf("reading service account token: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL+"/apis/user.openshift.io/v1/groups", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+string(saToken))
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("group list request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("group list failed (%d)", resp.StatusCode)
+	}
+
+	var groupList struct {
+		Items []struct {
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+			Users []string `json:"users"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&groupList); err != nil {
+		return nil, fmt.Errorf("decoding group list: %w", err)
+	}
+
+	var groups []string
+	for _, g := range groupList.Items {
+		for _, u := range g.Users {
+			if u == username {
+				groups = append(groups, g.Metadata.Name)
+				break
+			}
+		}
+	}
+	return groups, nil
 }
