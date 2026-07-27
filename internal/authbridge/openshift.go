@@ -23,6 +23,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -149,8 +150,10 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string) (
 	}
 
 	if strings.HasPrefix(info.Name, "system:serviceaccount:") {
-		extraGroups, err := c.getGroupMemberships(ctx, accessToken, info.Name)
-		if err == nil {
+		extraGroups, err := c.getGroupMemberships(ctx, info.Name)
+		if err != nil {
+			log.Printf("warning: group CR lookup failed for %s: %v", info.Name, err)
+		} else {
 			info.Groups = append(info.Groups, extraGroups...)
 		}
 	}
@@ -158,7 +161,7 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string) (
 	return info, nil
 }
 
-func (c *OpenShiftClient) getGroupMemberships(ctx context.Context, _ string, username string) ([]string, error) {
+func (c *OpenShiftClient) getGroupMemberships(ctx context.Context, username string) ([]string, error) {
 	apiURL := os.Getenv("KUBERNETES_API_URL")
 	if apiURL == "" {
 		apiURL = "https://kubernetes.default.svc:443"
