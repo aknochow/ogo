@@ -108,7 +108,7 @@ type UserInfo struct {
 	Groups []string `json:"groups"`
 }
 
-func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string) (*UserInfo, error) {
+func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, groupNames ...string) (*UserInfo, error) {
 	apiURL := os.Getenv("KUBERNETES_API_URL")
 	if apiURL == "" {
 		apiURL = "https://kubernetes.default.svc:443"
@@ -150,7 +150,7 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string) (
 	}
 
 	if strings.HasPrefix(info.Name, "system:serviceaccount:") {
-		extraGroups, err := c.getGroupMemberships(ctx, info.Name)
+		extraGroups, err := c.checkGroupMemberships(ctx, info.Name, groupNames)
 		if err != nil {
 			log.Printf("warning: group CR lookup failed for %s: %v", info.Name, err)
 		} else {
@@ -161,54 +161,64 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string) (
 	return info, nil
 }
 
-func (c *OpenShiftClient) getGroupMemberships(ctx context.Context, username string) ([]string, error) {
-	apiURL := os.Getenv("KUBERNETES_API_URL")
-	if apiURL == "" {
-		apiURL = "https://kubernetes.default.svc:443"
-	}
-	apiURL = strings.TrimRight(apiURL, "/")
+func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username string, groupNames []string) ([]string, error) {
+	apiURL := c.kubeAPIURL()
 
 	saToken, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
 	if err != nil {
 		return nil, fmt.Errorf("reading service account token: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL+"/apis/user.openshift.io/v1/groups", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+string(saToken))
+	var matched []string
+	for _, groupName := range groupNames {
+		if groupName == "" {
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET",
+			apiURL+"/apis/user.openshift.io/v1/groups/"+url.PathEscape(groupName), nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", "Bearer "+string(saToken))
 
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("group list request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("group lookup for %s: %w", groupName, err)
+		}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("group list failed (%d)", resp.StatusCode)
-	}
+		if resp.StatusCode == http.StatusNotFound {
+			_ = resp.Body.Close()
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("group lookup for %s failed (%d): %s", groupName, resp.StatusCode, string(body))
+		}
 
-	var groupList struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
+		var group struct {
 			Users []string `json:"users"`
-		} `json:"items"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&groupList); err != nil {
-		return nil, fmt.Errorf("decoding group list: %w", err)
-	}
+		}
+		err = json.NewDecoder(resp.Body).Decode(&group)
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("decoding group %s: %w", groupName, err)
+		}
 
-	var groups []string
-	for _, g := range groupList.Items {
-		for _, u := range g.Users {
+		for _, u := range group.Users {
 			if u == username {
-				groups = append(groups, g.Metadata.Name)
+				matched = append(matched, groupName)
 				break
 			}
 		}
 	}
-	return groups, nil
+	return matched, nil
+}
+
+func (c *OpenShiftClient) kubeAPIURL() string {
+	apiURL := os.Getenv("KUBERNETES_API_URL")
+	if apiURL == "" {
+		apiURL = "https://kubernetes.default.svc:443"
+	}
+	return strings.TrimRight(apiURL, "/")
 }
