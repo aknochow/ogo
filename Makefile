@@ -349,6 +349,22 @@ catalog-build: opm ## Build a catalog image.
 catalog-push: ## Push a catalog image.
 	$(MAKE) image-push IMG=$(CATALOG_IMG)
 
+.PHONY: olm-deploy
+olm-deploy: ## Deploy the operator via OLM (CatalogSource + Subscription).
+	@kubectl create ns ogo --dry-run=client -o yaml | kubectl apply -f -
+	@kubectl apply -f - <<< '{"apiVersion":"operators.coreos.com/v1alpha1","kind":"CatalogSource","metadata":{"name":"ogo-catalog","namespace":"openshift-marketplace"},"spec":{"sourceType":"grpc","image":"$(CATALOG_IMG)","displayName":"OGO Catalog","publisher":"aknochow"}}'
+	@kubectl apply -f - <<< '{"apiVersion":"operators.coreos.com/v1","kind":"OperatorGroup","metadata":{"name":"ogo","namespace":"ogo"},"spec":{"targetNamespaces":[]}}'
+	@kubectl apply -f - <<< '{"apiVersion":"operators.coreos.com/v1alpha1","kind":"Subscription","metadata":{"name":"ogo","namespace":"ogo"},"spec":{"channel":"alpha","name":"ogo","source":"ogo-catalog","sourceNamespace":"openshift-marketplace"}}'
+	@echo "OLM install started. Run 'kubectl get csv -n ogo' to check status."
+
+.PHONY: olm-undeploy
+olm-undeploy: ## Remove the OLM-deployed operator.
+	@kubectl delete subscription ogo -n ogo --ignore-not-found
+	@kubectl delete csv -n ogo -l operators.coreos.com/ogo.ogo= --ignore-not-found
+	@kubectl delete operatorgroup ogo -n ogo --ignore-not-found
+	@kubectl delete catalogsource ogo-catalog -n openshift-marketplace --ignore-not-found
+	@echo "OLM resources removed."
+
 .PHONY: docs
 docs: ## Build the docs site into public/
 	python3 scripts/ogo-docs.py
