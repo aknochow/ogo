@@ -109,11 +109,7 @@ type UserInfo struct {
 }
 
 func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, groupNames ...string) (*UserInfo, error) {
-	apiURL := os.Getenv("KUBERNETES_API_URL")
-	if apiURL == "" {
-		apiURL = "https://kubernetes.default.svc:443"
-	}
-	apiURL = strings.TrimRight(apiURL, "/")
+	apiURL := c.kubeAPIURL()
 
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL+"/apis/user.openshift.io/v1/users/~", nil)
 	if err != nil {
