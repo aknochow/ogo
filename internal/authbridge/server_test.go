@@ -435,16 +435,12 @@ func TestTokenExchangeServiceAccountGroupLookup(t *testing.T) {
 	t.Setenv("KUBERNETES_API_URL", mock.URL)
 
 	tokenFile := t.TempDir() + "/token"
-	if err := os.WriteFile(tokenFile, []byte("sa-bridge-token"), 0600); err != nil {
+	if err := os.WriteFile(tokenFile, []byte("bridge-sa-token"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	origPath := "/var/run/secrets/kubernetes.io/serviceaccount/token"
-	// Override the SA token path via a symlink in the test's temp dir
-	// Since we can't override the hardcoded path, we use KUBERNETES_API_URL
-	// and the mock accepts any bearer token for the groups endpoint
-	_ = origPath
 
 	s := testServer(t)
+	s.osc.SATokenPath = tokenFile
 	handler := s.Handler()
 
 	req := httptest.NewRequest("POST", "/token/exchange", nil)
@@ -452,22 +448,16 @@ func TestTokenExchangeServiceAccountGroupLookup(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	// The SA token file read will fail in test (no /var/run/secrets/...),
-	// so checkGroupMemberships returns an error, which now propagates.
-	// This validates the error propagation path.
-	if w.Code == http.StatusOK {
-		// If we somehow got 200, verify the token was issued
-		var resp map[string]interface{}
-		if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
-			t.Fatalf("decode: %v", err)
-		}
-		if resp["access_token"] == nil || resp["access_token"] == "" {
-			t.Error("access_token is empty")
-		}
-	} else if w.Code != http.StatusUnauthorized {
-		// Expected: 401 because SA token file doesn't exist in test env,
-		// causing checkGroupMemberships to fail and GetUserInfo to return error
-		t.Errorf("status = %d, want 200 or 401, body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["access_token"] == nil || resp["access_token"] == "" {
+		t.Error("access_token is empty")
 	}
 }
 
@@ -488,7 +478,13 @@ func TestTokenExchangeServiceAccountNotInGroup(t *testing.T) {
 
 	t.Setenv("KUBERNETES_API_URL", mock.URL)
 
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("bridge-sa-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
 	s := testServer(t)
+	s.osc.SATokenPath = tokenFile
 	handler := s.Handler()
 
 	req := httptest.NewRequest("POST", "/token/exchange", nil)
@@ -496,10 +492,8 @@ func TestTokenExchangeServiceAccountNotInGroup(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
-	// SA token file won't exist, so this will fail with 401 (error propagation)
-	// In a real cluster, it would reach the group check and get 403 (not in group)
-	if w.Code != http.StatusUnauthorized && w.Code != http.StatusForbidden {
-		t.Errorf("status = %d, want 401 or 403 for SA not in group", w.Code)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for SA not in group, body: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -512,8 +506,6 @@ func TestCheckGroupMemberships(t *testing.T) {
 		case "/apis/user.openshift.io/v1/groups/openshell-admins":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-admins"},"users":["alice"]}`))
-		case "/apis/user.openshift.io/v1/groups/nonexistent":
-			http.Error(w, "not found", http.StatusNotFound)
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -522,45 +514,41 @@ func TestCheckGroupMemberships(t *testing.T) {
 
 	t.Setenv("KUBERNETES_API_URL", mock.URL)
 
-	// Create a fake SA token file
-	tokenDir := t.TempDir()
-	tokenFile := tokenDir + "/token"
+	tokenFile := t.TempDir() + "/token"
 	if err := os.WriteFile(tokenFile, []byte("fake-sa-token"), 0600); err != nil {
 		t.Fatal(err)
 	}
 
 	osc := NewOpenShiftClient(mock.URL, "test", "test")
+	osc.SATokenPath = tokenFile
 
-	// We can't easily override the hardcoded token path, so test the
-	// mock HTTP serving directly
 	tests := []struct {
-		name       string
-		username   string
-		groups     []string
-		wantMatch  []string
-		wantErr    bool
+		name      string
+		username  string
+		groups    []string
+		wantMatch []string
 	}{
-		{"SA in user group", "system:serviceaccount:ns:mysa", []string{"openshell-users"}, []string{"openshell-users"}, false},
-		{"SA not in admin group", "system:serviceaccount:ns:mysa", []string{"openshell-admins"}, nil, false},
-		{"SA in user but not admin", "system:serviceaccount:ns:mysa", []string{"openshell-users", "openshell-admins"}, []string{"openshell-users"}, false},
-		{"nonexistent group", "system:serviceaccount:ns:mysa", []string{"nonexistent"}, nil, false},
-		{"empty groups", "system:serviceaccount:ns:mysa", []string{}, nil, false},
-		{"empty string group", "system:serviceaccount:ns:mysa", []string{""}, nil, false},
+		{"SA in user group", "system:serviceaccount:ns:mysa", []string{"openshell-users"}, []string{"openshell-users"}},
+		{"SA not in admin group", "system:serviceaccount:ns:mysa", []string{"openshell-admins"}, nil},
+		{"SA in user but not admin", "system:serviceaccount:ns:mysa", []string{"openshell-users", "openshell-admins"}, []string{"openshell-users"}},
+		{"nonexistent group", "system:serviceaccount:ns:mysa", []string{"nonexistent"}, nil},
+		{"empty groups", "system:serviceaccount:ns:mysa", []string{}, nil},
+		{"empty string group", "system:serviceaccount:ns:mysa", []string{""}, nil},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// checkGroupMemberships reads SA token from disk, which won't work
-			// in tests. Test the HTTP mock behavior directly instead.
-			for _, groupName := range tt.groups {
-				if groupName == "" {
-					continue
+			matched, err := osc.checkGroupMemberships(t.Context(), tt.username, tt.groups)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(matched) != len(tt.wantMatch) {
+				t.Errorf("matched = %v, want %v", matched, tt.wantMatch)
+			}
+			for i := range matched {
+				if i < len(tt.wantMatch) && matched[i] != tt.wantMatch[i] {
+					t.Errorf("matched[%d] = %q, want %q", i, matched[i], tt.wantMatch[i])
 				}
-				resp, err := osc.httpClient.Get(mock.URL + "/apis/user.openshift.io/v1/groups/" + groupName)
-				if err != nil {
-					t.Fatalf("group lookup: %v", err)
-				}
-				_ = resp.Body.Close()
 			}
 		})
 	}

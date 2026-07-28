@@ -30,11 +30,14 @@ import (
 	"time"
 )
 
+const defaultSATokenPath = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+
 type OpenShiftClient struct {
 	oauthServerURL string
 	clientID       string
 	clientSecret   string
 	httpClient     *http.Client
+	SATokenPath    string
 }
 
 func NewOpenShiftClient(oauthServerURL, clientID, clientSecret string) *OpenShiftClient {
@@ -158,7 +161,11 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, g
 func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username string, groupNames []string) ([]string, error) {
 	apiURL := c.kubeAPIURL()
 
-	saToken, err := os.ReadFile("/var/run/secrets/kubernetes.io/serviceaccount/token")
+	tokenPath := c.SATokenPath
+	if tokenPath == "" {
+		tokenPath = defaultSATokenPath
+	}
+	saToken, err := os.ReadFile(tokenPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading service account token: %w", err)
 	}
