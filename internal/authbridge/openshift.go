@@ -240,7 +240,12 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 		for _, u := range group.Users {
 			candidate := u
 			if strings.HasPrefix(u, "b64:") {
-				if decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(u, "b64:")); err == nil {
+				encoded := strings.TrimPrefix(u, "b64:")
+				decoded, err := base64.StdEncoding.DecodeString(encoded)
+				if err != nil {
+					decoded, err = base64.RawStdEncoding.DecodeString(encoded)
+				}
+				if err == nil {
 					candidate = string(decoded)
 				}
 			}
