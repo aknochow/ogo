@@ -53,7 +53,13 @@ func NewOpenShiftClient(oauthServerURL, clientID, clientSecret string) *OpenShif
 		oauthServerURL: strings.TrimRight(oauthServerURL, "/"),
 		clientID:       clientID,
 		clientSecret:   clientSecret,
-		httpClient:     &http.Client{Transport: transport, Timeout: 30 * time.Second},
+		httpClient: &http.Client{
+			Transport: transport,
+			Timeout:   30 * time.Second,
+			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
@@ -209,9 +215,9 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
 			_ = resp.Body.Close()
-			return nil, fmt.Errorf("group lookup for %s failed (%d): %s", groupName, resp.StatusCode, string(body))
+			return nil, fmt.Errorf("group lookup for %s failed with status %d", groupName, resp.StatusCode)
 		}
 
 		var group struct {
