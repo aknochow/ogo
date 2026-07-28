@@ -189,7 +189,7 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 
 	rawToken, err := os.ReadFile(c.SATokenPath)
 	if err != nil {
-		return nil, fmt.Errorf("reading service account token: %w", err)
+		return nil, fmt.Errorf("reading service account token failed")
 	}
 	saToken := strings.TrimSpace(string(rawToken))
 	if saToken == "" {
