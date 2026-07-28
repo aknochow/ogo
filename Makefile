@@ -114,7 +114,9 @@ test: manifests generate fmt vet setup-envtest ## Run tests.
 # CertManager is installed by default; skip with CERT_MANAGER_INSTALL_SKIP=true.
 KIND_CLUSTER ?= ogo-test-e2e
 # NOTE: Kind does not include OpenShift APIs (route.openshift.io, oauth.openshift.io).
-# E2E tests that exercise OpenShift-specific features require MINC or CRC.
+# MINC (MicroShift) has route.openshift.io but NOT oauth.openshift.io/user.openshift.io —
+# SSO, OAuthClient, and Group-based auth code paths are untestable on MINC.
+# Those paths require a real OpenShift cluster or CRC with the full preset; see test-e2e-real.
 
 .PHONY: setup-test-e2e
 setup-test-e2e: ## Set up a Kind cluster for e2e tests if it does not exist
@@ -138,6 +140,22 @@ test-e2e: setup-test-e2e manifests generate fmt vet ## Run the e2e tests. Expect
 .PHONY: cleanup-test-e2e
 cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
+
+.PHONY: test-e2e-real
+test-e2e-real: manifests generate fmt vet ## Run e2e tests against a real OpenShift cluster (set KUBECONFIG and IMG). Covers SSO/OAuthClient/cert-manager paths MINC can't.
+	@if [ -z "$$KUBECONFIG" ]; then \
+		echo "KUBECONFIG must point at a real OpenShift cluster (e.g. SNO) with cert-manager + SSO configured"; \
+		exit 1; \
+	fi
+	@if [ -z "$$IMG" ]; then \
+		echo "IMG must point at an image already pushed to a registry the target cluster can pull (e.g."; \
+		echo "quay.io/aknochow/ogo:main, or your own image built for the cluster's arch via podzilla and pushed)."; \
+		echo "This target never builds locally — a local build on Apple Silicon produces an arm64 image"; \
+		echo "that can't run on a real cluster's amd64 nodes, and it's never pushed anywhere the cluster"; \
+		echo "could pull it from."; \
+		exit 1; \
+	fi
+	SKIP_BUILD=true CERT_MANAGER_INSTALL_SKIP=true IMG=$(IMG) go test ./test/e2e/ -v -ginkgo.v -timeout 20m
 
 .PHONY: lint
 lint: golangci-lint ## Run golangci-lint linter

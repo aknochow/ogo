@@ -40,3 +40,4 @@ index.Dockerfile*
 kubeconfig
 .claude/
 public/
+.backup/
