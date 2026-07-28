@@ -245,9 +245,10 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 				if err != nil {
 					decoded, err = base64.RawStdEncoding.DecodeString(encoded)
 				}
-				if err == nil {
-					candidate = string(decoded)
+				if err != nil {
+					continue
 				}
+				candidate = string(decoded)
 			}
 			if candidate == username {
 				matched = append(matched, groupName)
