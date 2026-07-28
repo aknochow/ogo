@@ -1116,10 +1116,7 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
 	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		if _, discoveryErr := r.DiscoveryClient.ServerResourcesForGroupVersion("cert-manager.io/v1"); discoveryErr != nil {
 			return fmt.Errorf("cert-manager CRDs not installed — required for Gateway API TLS")
 		}
@@ -1135,20 +1132,35 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 		issuerKind = "ClusterIssuer"
 	}
 
-	cert := &unstructured.Unstructured{}
-	cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
-	cert.SetName(secretName)
-	cert.SetNamespace(ns)
-	cert.SetLabels(gatewayLabels(gw))
-	cert.Object["spec"] = map[string]interface{}{
-		"secretName": secretName,
-		"dnsNames":   []interface{}{hostname},
-		"issuerRef": map[string]interface{}{
-			"name": issuerName,
-			"kind": issuerKind,
-		},
+	if apierrors.IsNotFound(err) {
+		cert := &unstructured.Unstructured{}
+		cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+		cert.SetName(secretName)
+		cert.SetNamespace(ns)
+		cert.SetLabels(gatewayLabels(gw))
+		cert.Object["spec"] = map[string]interface{}{
+			"secretName": secretName,
+			"dnsNames":   []interface{}{hostname},
+			"issuerRef": map[string]interface{}{
+				"name": issuerName,
+				"kind": issuerKind,
+			},
+		}
+		return r.Create(ctx, cert)
 	}
-	return r.Create(ctx, cert)
+
+	// Keep the Certificate's dnsNames in sync with the current hostname —
+	// route.Hostname can change between deployments (e.g. promoting a new
+	// build to staging), and cert-manager won't reissue for a new hostname
+	// unless the Certificate spec itself is updated to request it.
+	existingDNSNames, _, _ := unstructured.NestedStringSlice(existing.Object, "spec", "dnsNames")
+	if len(existingDNSNames) == 1 && existingDNSNames[0] == hostname {
+		return nil
+	}
+	if err := unstructured.SetNestedStringSlice(existing.Object, []string{hostname}, "spec", "dnsNames"); err != nil {
+		return fmt.Errorf("updating Certificate dnsNames: %w", err)
+	}
+	return r.Update(ctx, existing)
 }
 
 func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
