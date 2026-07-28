@@ -193,7 +193,7 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 	}
 	saToken := strings.TrimSpace(string(rawToken))
 	if saToken == "" {
-		return nil, fmt.Errorf("service account token file %s is empty", c.SATokenPath)
+		return nil, fmt.Errorf("service account token file is empty")
 	}
 
 	// groupNames is expected to be a small set (typically ≤2: UserGroup + AdminGroup),
