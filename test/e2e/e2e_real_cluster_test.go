@@ -47,6 +47,14 @@ import (
 
 var realClusterAppsDomain = os.Getenv("E2E_REAL_CLUSTER_APPS_DOMAIN")
 
+// keepClusterAfterSuite leaves the operator and a running gateway deployed
+// after the suite finishes instead of tearing everything down — turning the
+// target cluster (e.g. SNO) into a persistent staging environment running
+// whatever build was just tested, promoted there ahead of a real cluster
+// like RDU. Re-running test-e2e-real is idempotent against this leftover
+// state (BeforeAll only ever applies/installs, never assumes a clean slate).
+var keepClusterAfterSuite = os.Getenv("E2E_REAL_CLUSTER_KEEP") == "true"
+
 // realClusterHostname is unique per commit (ogo-e2e-<short-sha>.<apps-domain>)
 // so repeated e2e runs across commits don't collide on the same Let's
 // Encrypt identifier and trip its per-hostname rate limit.
@@ -76,6 +84,23 @@ func hasGatewayClass(name string) bool {
 	cmd := exec.Command("kubectl", "get", "gatewayclass", name)
 	_, err := utils.Run(cmd)
 	return err == nil
+}
+
+// stagingAuthBridgeImage derives the matching ogo-auth-bridge image from the
+// controller image under test (e.g. quay.io/aknochow/ogo:baseline-abc123 ->
+// quay.io/aknochow/ogo-auth-bridge:baseline-abc123), so the KEEP staging
+// deployment actually exercises the auth-bridge fix being verified rather
+// than falling back to the operator's hardcoded :latest default.
+func stagingAuthBridgeImage(controllerImage string) string {
+	repo, tag, ok := strings.Cut(controllerImage, ":")
+	if !ok {
+		return ""
+	}
+	slash := strings.LastIndex(repo, "/")
+	if slash == -1 || repo[slash+1:] != "ogo" {
+		return ""
+	}
+	return repo[:slash+1] + "ogo-auth-bridge:" + tag
 }
 
 func decodeBase64(s string) string {
@@ -122,6 +147,43 @@ var _ = Describe("RealCluster", Ordered, func() {
 		if skipReason != "" {
 			return
 		}
+		if keepClusterAfterSuite {
+			By("leaving the operator deployed and applying a staging gateway CR (E2E_REAL_CLUSTER_KEEP=true)")
+			authBridgeLine := ""
+			if img := stagingAuthBridgeImage(projectImage); img != "" {
+				authBridgeLine = fmt.Sprintf("  authBridgeImage: %s\n", img)
+			}
+			cr := fmt.Sprintf(`
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellGateway
+metadata:
+  name: openshell
+spec:
+  namespace: %s
+  database:
+    embedded: true
+  auth:
+    openshift:
+      userGroup: openshell-users
+      adminGroup: openshell-admins
+  tls:
+    enabled: true
+    certManager:
+      enabled: true
+      issuerName: letsencrypt
+      issuerKind: ClusterIssuer
+  route:
+    hostname: %s
+    gatewayAPI:
+      enabled: false
+%s`, namespace, realClusterHostname, authBridgeLine)
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(cr)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply staging gateway CR")
+			return
+		}
+
 		By("cleaning up gateway CR if still present")
 		cmd := exec.Command("kubectl", "delete", "openshellgateways", "openshell",
 			"--timeout=60s", "--ignore-not-found=true")
