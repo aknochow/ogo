@@ -507,7 +507,8 @@ func TestCheckGroupMemberships(t *testing.T) {
 		switch r.URL.Path {
 		case "/apis/user.openshift.io/v1/groups/openshell-users":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-users"},"users":["system:serviceaccount:ns:mysa","alice"]}`))
+			// OpenShift stores SA names with colons as b64-encoded entries
+			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-users"},"users":["b64:c3lzdGVtOnNlcnZpY2VhY2NvdW50Om5zOm15c2E=","alice"]}`))
 		case "/apis/user.openshift.io/v1/groups/openshell-admins":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-admins"},"users":["alice"]}`))
