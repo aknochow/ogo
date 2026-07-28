@@ -358,12 +358,22 @@ olm-deploy: ## Deploy the operator via OLM (CatalogSource + Subscription).
 	@echo "OLM install started. Run 'kubectl get csv -n ogo' to check status."
 
 .PHONY: olm-undeploy
-olm-undeploy: ## Remove the OLM-deployed operator.
+olm-undeploy: ## Remove the OLM-deployed operator and all managed resources.
+	@echo "Deleting gateway CR (triggers finalizer cleanup)..."
+	@kubectl delete openshellgateways --all --timeout=30s --ignore-not-found 2>/dev/null || true
+	@echo "Removing OLM resources..."
 	@kubectl delete subscription ogo -n ogo --ignore-not-found
 	@kubectl delete csv -n ogo -l operators.coreos.com/ogo.ogo= --ignore-not-found
 	@kubectl delete operatorgroup ogo -n ogo --ignore-not-found
 	@kubectl delete catalogsource ogo-catalog -n openshift-marketplace --ignore-not-found
-	@echo "OLM resources removed."
+	@echo "Cleaning up cluster-scoped resources..."
+	@kubectl delete oauthclient openshell --ignore-not-found 2>/dev/null || true
+	@kubectl delete gatewayclass eg --ignore-not-found 2>/dev/null || true
+	@kubectl delete groups openshell-users openshell-admins --ignore-not-found 2>/dev/null || true
+	@echo "Removing namespaces..."
+	@kubectl delete ns envoy-gateway-system --ignore-not-found --timeout=60s 2>/dev/null || true
+	@kubectl delete ns ogo --ignore-not-found --timeout=60s 2>/dev/null || true
+	@echo "Full teardown complete."
 
 .PHONY: docs
 docs: ## Build the docs site into public/
