@@ -99,6 +99,13 @@ spec:
                     - userGroup
                     type: object
                 type: object
+              authBridgeImage:
+                description: |-
+                  AuthBridgeImage overrides the auth-bridge sidecar image, including tag.
+                  Defaults to quay.io/aknochow/ogo-auth-bridge:latest when unset. A
+                  separate field from ImageTag since auth-bridge is our own image on an
+                  independent release cadence from the upstream gateway/supervisor images.
+                type: string
               database:
                 description: Database configures the PostgreSQL connection.
                 properties:
