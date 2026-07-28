@@ -229,7 +229,7 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userInfo, err := s.osc.GetUserInfo(r.Context(), tokenResp.AccessToken)
+	userInfo, err := s.osc.GetUserInfo(r.Context(), tokenResp.AccessToken, s.config.UserGroup, s.config.AdminGroup)
 	if err != nil {
 		log.Printf("user info failed: %v", err)
 		http.Error(w, "failed to get user info", http.StatusInternalServerError)
@@ -342,7 +342,7 @@ func (s *Server) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	ocpToken := strings.TrimPrefix(auth, "Bearer ")
 
-	userInfo, err := s.osc.GetUserInfo(r.Context(), ocpToken)
+	userInfo, err := s.osc.GetUserInfo(r.Context(), ocpToken, s.config.UserGroup, s.config.AdminGroup)
 	if err != nil {
 		log.Printf("token exchange: user info failed: %v", err)
 		http.Error(w, `{"error":"invalid OpenShift token"}`, http.StatusUnauthorized)
