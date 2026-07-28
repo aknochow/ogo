@@ -37,6 +37,7 @@ type OpenShiftClient struct {
 	clientID       string
 	clientSecret   string
 	httpClient     *http.Client
+	saHTTPClient   *http.Client
 	SATokenPath    string
 }
 
@@ -53,13 +54,15 @@ func NewOpenShiftClient(oauthServerURL, clientID, clientSecret string) *OpenShif
 		oauthServerURL: strings.TrimRight(oauthServerURL, "/"),
 		clientID:       clientID,
 		clientSecret:   clientSecret,
-		httpClient: &http.Client{
+		httpClient:     &http.Client{Transport: transport, Timeout: 30 * time.Second},
+		saHTTPClient: &http.Client{
 			Transport: transport,
 			Timeout:   30 * time.Second,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
 		},
+		SATokenPath: defaultSATokenPath,
 	}
 }
 
@@ -181,11 +184,7 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, g
 func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username string, groupNames []string) ([]string, error) {
 	apiURL := c.kubeAPIURL()
 
-	tokenPath := c.SATokenPath
-	if tokenPath == "" {
-		tokenPath = defaultSATokenPath
-	}
-	rawToken, err := os.ReadFile(tokenPath)
+	rawToken, err := os.ReadFile(c.SATokenPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading service account token: %w", err)
 	}
@@ -205,7 +204,7 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 		}
 		req.Header.Set("Authorization", "Bearer "+saToken)
 
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.saHTTPClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("group lookup for %s: %w", groupName, err)
 		}
