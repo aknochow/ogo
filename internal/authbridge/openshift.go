@@ -161,6 +161,9 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, g
 	return info, nil
 }
 
+// checkGroupMemberships queries OpenShift Group CRs using the bridge's own SA token
+// to determine which of the given groupNames contain the specified username.
+// Returns the subset of groupNames the user belongs to.
 func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username string, groupNames []string) ([]string, error) {
 	apiURL := c.kubeAPIURL()
 
