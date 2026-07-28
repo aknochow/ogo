@@ -210,6 +210,7 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 		}
 
 		if resp.StatusCode == http.StatusNotFound {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
 			_ = resp.Body.Close()
 			continue
 		}
