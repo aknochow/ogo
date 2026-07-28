@@ -153,6 +153,11 @@ var _ = Describe("RealCluster", Ordered, func() {
 			if img := stagingAuthBridgeImage(projectImage); img != "" {
 				authBridgeLine = fmt.Sprintf("  authBridgeImage: %s\n", img)
 			}
+			// Mirrors RDU's actual production shape: Gateway API/Envoy fronting
+			// a public cert-manager (Let's Encrypt) cert, gateway pod itself
+			// plaintext internally. This is the whole point of the per-run
+			// unique hostname — a real, browser-trusted cert per staged build,
+			// not the self-signed direct-Route fallback.
 			cr := fmt.Sprintf(`
 apiVersion: gateway.ogo.aknochow.io/v1alpha1
 kind: OpenShellGateway
@@ -167,7 +172,7 @@ spec:
       userGroup: openshell-users
       adminGroup: openshell-admins
   tls:
-    enabled: true
+    enabled: false
     certManager:
       enabled: true
       issuerName: letsencrypt
@@ -175,7 +180,7 @@ spec:
   route:
     hostname: %s
     gatewayAPI:
-      enabled: false
+      enabled: true
 %s`, namespace, realClusterHostname, authBridgeLine)
 			cmd := exec.Command("kubectl", "apply", "-f", "-")
 			cmd.Stdin = strings.NewReader(cr)
