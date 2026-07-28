@@ -424,6 +424,10 @@ func TestTokenExchangeServiceAccountGroupLookup(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"metadata":{"name":"system:serviceaccount:mynamespace:mysa","uid":"uid-sa"},"groups":["system:authenticated","system:serviceaccounts","system:serviceaccounts:mynamespace"]}`))
 		case "/apis/user.openshift.io/v1/groups/openshell-users":
+			if r.Header.Get("Authorization") != "Bearer bridge-sa-token" {
+				http.Error(w, "forbidden: wrong token for group lookup", http.StatusForbidden)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-users"},"users":["system:serviceaccount:mynamespace:mysa","alice"]}`))
 		default:

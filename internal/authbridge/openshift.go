@@ -110,6 +110,9 @@ type UserInfo struct {
 	Groups []string `json:"groups"`
 }
 
+// GetUserInfo retrieves user info from the OpenShift users/~ API. For ServiceAccount
+// identities, it additionally checks membership in the specified groupNames by querying
+// Group CRs directly, since the users/~ endpoint does not return custom group memberships for SAs.
 func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, groupNames ...string) (*UserInfo, error) {
 	apiURL := c.kubeAPIURL()
 
@@ -165,10 +168,11 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 	if tokenPath == "" {
 		tokenPath = defaultSATokenPath
 	}
-	saToken, err := os.ReadFile(tokenPath)
+	rawToken, err := os.ReadFile(tokenPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading service account token: %w", err)
 	}
+	saToken := strings.TrimSpace(string(rawToken))
 
 	var matched []string
 	for _, groupName := range groupNames {
@@ -180,7 +184,7 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("Authorization", "Bearer "+string(saToken))
+		req.Header.Set("Authorization", "Bearer "+saToken)
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
