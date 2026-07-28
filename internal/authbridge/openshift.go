@@ -155,7 +155,15 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, g
 		if err != nil {
 			return nil, fmt.Errorf("group CR lookup for %s: %w", info.Name, err)
 		}
-		info.Groups = append(info.Groups, extraGroups...)
+		seen := make(map[string]bool, len(info.Groups))
+		for _, g := range info.Groups {
+			seen[g] = true
+		}
+		for _, g := range extraGroups {
+			if !seen[g] {
+				info.Groups = append(info.Groups, g)
+			}
+		}
 	}
 
 	return info, nil
@@ -177,6 +185,8 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 	}
 	saToken := strings.TrimSpace(string(rawToken))
 
+	// groupNames is expected to be a small set (typically ≤2: UserGroup + AdminGroup),
+	// so sequential lookups are fine.
 	var matched []string
 	for _, groupName := range groupNames {
 		if groupName == "" {
