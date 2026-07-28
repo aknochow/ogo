@@ -411,6 +411,10 @@ func (r *OpenShellGatewayReconciler) reconcileClusterRole(ctx context.Context, g
 		cr.Rules = []rbacv1.PolicyRule{
 			{APIGroups: []string{"authentication.k8s.io"}, Resources: []string{"tokenreviews"}, Verbs: []string{"create"}},
 			{APIGroups: []string{""}, Resources: []string{"nodes"}, Verbs: []string{"get", "list", "watch"}},
+			// auth-bridge looks up Group CR membership directly for ServiceAccount
+			// identities, since the users/~ self-lookup API never returns their
+			// custom Group memberships (see checkGroupMemberships in authbridge/openshift.go).
+			{APIGroups: []string{"user.openshift.io"}, Resources: []string{"groups"}, Verbs: []string{"get"}},
 		}
 		return nil
 	})
