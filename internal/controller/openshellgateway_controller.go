@@ -21,7 +21,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
-	"net"
 	"strings"
 	"time"
 
@@ -465,90 +464,21 @@ func (r *OpenShellGatewayReconciler) reconcileTLS(ctx context.Context, gw *ogov1
 		return nil
 	}
 
-	if gw.Spec.TLS.CertManager.Enabled {
-		return r.reconcileCertManagerCertificate(ctx, gw)
-	}
-
-	return r.reconcileSelfSignedTLS(ctx, gw)
-}
-
-func (r *OpenShellGatewayReconciler) reconcileCertManagerCertificate(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
-	ns := gatewayNamespace(gw)
-	issuerName := gw.Spec.TLS.CertManager.IssuerName
-	if issuerName == "" {
-		issuerName = "letsencrypt"
-	}
-	issuerKind := gw.Spec.TLS.CertManager.IssuerKind
-	if issuerKind == "" {
-		issuerKind = "ClusterIssuer"
-	}
-
-	if gw.Spec.Route.Hostname == "" {
-		return fmt.Errorf("cert-manager requires route.hostname for public certificate issuance")
-	}
-
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
-	err := r.Get(ctx, types.NamespacedName{Name: gw.Name + "-server-tls", Namespace: ns}, existing)
-	if apierrors.IsNotFound(err) {
-		_, discoveryErr := r.DiscoveryClient.ServerResourcesForGroupVersion("cert-manager.io/v1")
-		if discoveryErr != nil {
-			return fmt.Errorf("cert-manager CRDs not installed on cluster")
-		}
-
-		cert := &unstructured.Unstructured{}
-		cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
-		cert.SetName(gw.Name + "-server-tls")
-		cert.SetNamespace(ns)
-		cert.SetLabels(gatewayLabels(gw))
-		// Let's Encrypt issuers will reject internal SANs — use a self-signed
-		// ClusterIssuer if you need both external TLS and supervisor connectivity.
-		sans := computeServerSANs(gw)
-		dnsNames := []interface{}{}
-		for _, s := range sans {
-			if net.ParseIP(s) == nil {
-				dnsNames = append(dnsNames, s)
-			}
-		}
-		cert.Object["spec"] = map[string]interface{}{
-			"secretName": gw.Name + "-server-tls",
-			"issuerRef":  map[string]interface{}{"name": issuerName, "kind": issuerKind},
-			"dnsNames":   dnsNames,
-		}
-		if err := r.Create(ctx, cert); err != nil {
-			return fmt.Errorf("creating cert-manager Certificate: %w", err)
-		}
-	} else if err != nil {
+	// Always generate self-signed certs for internal mTLS (client certs,
+	// CA) — the gateway pod's own listener never presents a publicly
+	// trusted cert, since it also has to be trusted by the self-signed
+	// client CA for supervisor mTLS. When cert-manager is enabled,
+	// separately issue a public cert for the Gateway API listener only
+	// (see reconcileGatewayAPI / reconcileGatewayTLSCert).
+	if err := r.reconcileSelfSignedTLS(ctx, gw); err != nil {
 		return err
 	}
 
-	// cert-manager handles the server cert; generate self-signed client certs
-	// for internal mTLS (supervisor → gateway) independently.
-	// Use CreateOrUpdate with SAN hash tracking so the client cert is
-	// regenerated when the hostname changes.
-	clientSecretName := gw.Name + "-client-tls"
-	sans := computeServerSANs(gw)
-	sansHash := pki.HashSANs(sans)
-
-	clientSecret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: clientSecretName, Namespace: ns}}
-	if _, err := controllerutil.CreateOrUpdate(ctx, r.Client, clientSecret, func() error {
-		if clientSecret.Annotations != nil && clientSecret.Annotations["ogo.aknochow.io/pki-sans-hash"] == sansHash {
-			return nil
+	if gw.Spec.TLS.CertManager.Enabled && gw.Spec.Route.Hostname != "" {
+		certSecretName := gw.Name + "-gateway-tls"
+		if err := r.reconcileGatewayTLSCert(ctx, gw, certSecretName, gw.Spec.Route.Hostname); err != nil {
+			return fmt.Errorf("reconciling cert-manager TLS certificate: %w", err)
 		}
-		bundle, err := pki.GeneratePKI(sans)
-		if err != nil {
-			return fmt.Errorf("generating client PKI: %w", err)
-		}
-		clientSecret.Labels = gatewayLabels(gw)
-		if clientSecret.Annotations == nil {
-			clientSecret.Annotations = map[string]string{}
-		}
-		clientSecret.Annotations["ogo.aknochow.io/pki-sans-hash"] = sansHash
-		clientSecret.Type = corev1.SecretTypeTLS
-		clientSecret.Data = map[string][]byte{"tls.crt": bundle.ClientCert, "tls.key": bundle.ClientKey, "ca.crt": bundle.CACert}
-		return nil
-	}); err != nil {
-		return fmt.Errorf("reconciling client TLS secret: %w", err)
 	}
 
 	return nil
