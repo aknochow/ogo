@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -237,7 +238,19 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 		}
 
 		for _, u := range group.Users {
-			if u == username {
+			candidate := u
+			if strings.HasPrefix(u, "b64:") {
+				encoded := strings.TrimPrefix(u, "b64:")
+				decoded, err := base64.StdEncoding.DecodeString(encoded)
+				if err != nil {
+					decoded, err = base64.RawStdEncoding.DecodeString(encoded)
+				}
+				if err != nil {
+					continue
+				}
+				candidate = string(decoded)
+			}
+			if candidate == username {
 				matched = append(matched, groupName)
 				break
 			}

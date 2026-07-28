@@ -507,7 +507,8 @@ func TestCheckGroupMemberships(t *testing.T) {
 		switch r.URL.Path {
 		case "/apis/user.openshift.io/v1/groups/openshell-users":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-users"},"users":["system:serviceaccount:ns:mysa","alice"]}`))
+			// OpenShift stores SA names with colons as b64-encoded entries; include plain, encoded, and invalid
+			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-users"},"users":["b64:c3lzdGVtOnNlcnZpY2VhY2NvdW50Om5zOm15c2E=","system:serviceaccount:ns:mysa-plain","b64:!!!invalid","alice"]}`))
 		case "/apis/user.openshift.io/v1/groups/openshell-admins":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-admins"},"users":["alice"]}`))
@@ -533,9 +534,11 @@ func TestCheckGroupMemberships(t *testing.T) {
 		groups    []string
 		wantMatch []string
 	}{
-		{"SA in user group", "system:serviceaccount:ns:mysa", []string{"openshell-users"}, []string{"openshell-users"}},
+		{"SA in user group via b64", "system:serviceaccount:ns:mysa", []string{"openshell-users"}, []string{"openshell-users"}},
+		{"SA in user group via plain", "system:serviceaccount:ns:mysa-plain", []string{"openshell-users"}, []string{"openshell-users"}},
 		{"SA not in admin group", "system:serviceaccount:ns:mysa", []string{"openshell-admins"}, nil},
 		{"SA in user but not admin", "system:serviceaccount:ns:mysa", []string{"openshell-users", "openshell-admins"}, []string{"openshell-users"}},
+		{"invalid b64 entry skipped", "!!!invalid", []string{"openshell-users"}, nil},
 		{"nonexistent group", "system:serviceaccount:ns:mysa", []string{"nonexistent"}, nil},
 		{"empty groups", "system:serviceaccount:ns:mysa", []string{}, nil},
 		{"empty string group", "system:serviceaccount:ns:mysa", []string{""}, nil},
