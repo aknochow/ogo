@@ -1513,13 +1513,12 @@ func (r *OpenShellGatewayReconciler) reconcileOAuthClient(ctx context.Context, g
 	clientSecret := string(secret.Data["secret"])
 	callbackURL := authBridgeExternalURL(gw) + "/callback"
 
-	oauthClient := &unstructured.Unstructured{}
-	oauthClient.SetGroupVersionKind(schema.GroupVersionKind{Group: "oauth.openshift.io", Version: "v1", Kind: "OAuthClient"})
-
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "oauth.openshift.io", Version: "v1", Kind: "OAuthClient"})
 	err = r.Get(ctx, types.NamespacedName{Name: "openshell"}, existing)
 	if apierrors.IsNotFound(err) {
+		oauthClient := &unstructured.Unstructured{}
+		oauthClient.SetGroupVersionKind(schema.GroupVersionKind{Group: "oauth.openshift.io", Version: "v1", Kind: "OAuthClient"})
 		oauthClient.SetName("openshell")
 		oauthClient.SetLabels(gatewayLabels(gw))
 		oauthClient.Object["secret"] = clientSecret
@@ -1527,7 +1526,23 @@ func (r *OpenShellGatewayReconciler) reconcileOAuthClient(ctx context.Context, g
 		oauthClient.Object["redirectURIs"] = []interface{}{callbackURL}
 		return r.Create(ctx, oauthClient)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Keep an existing OAuthClient in sync. The namespace Secret is the
+	// source of truth and can be regenerated independently of this
+	// cluster-scoped object (e.g. a redeploy onto a fresh namespace), which
+	// must not leave the OAuthClient pointing at a stale secret/redirect —
+	// that fails OIDC token exchange with "unauthorized_client".
+	existingSecret, _, _ := unstructured.NestedString(existing.Object, "secret")
+	existingRedirectURIs, _, _ := unstructured.NestedStringSlice(existing.Object, "redirectURIs")
+	if existingSecret == clientSecret && len(existingRedirectURIs) == 1 && existingRedirectURIs[0] == callbackURL {
+		return nil
+	}
+	existing.Object["secret"] = clientSecret
+	existing.Object["redirectURIs"] = []interface{}{callbackURL}
+	return r.Update(ctx, existing)
 }
 
 func generateOAuthSecret() string {
