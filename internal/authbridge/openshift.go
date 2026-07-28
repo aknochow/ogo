@@ -193,7 +193,7 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 		var group struct {
 			Users []string `json:"users"`
 		}
-		err = json.NewDecoder(resp.Body).Decode(&group)
+		err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&group)
 		_ = resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("decoding group %s: %w", groupName, err)
