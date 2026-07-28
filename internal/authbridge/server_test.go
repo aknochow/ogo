@@ -17,10 +17,12 @@ limitations under the License.
 package authbridge
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -408,6 +410,152 @@ func TestTokenExchangeRejectsInvalidToken(t *testing.T) {
 
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401 for invalid token", w.Code)
+	}
+}
+
+func TestTokenExchangeServiceAccountGroupLookup(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/apis/user.openshift.io/v1/users/~":
+			auth := r.Header.Get("Authorization")
+			if auth != "Bearer sa-token-123" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"name":"system:serviceaccount:mynamespace:mysa","uid":"uid-sa"},"groups":["system:authenticated","system:serviceaccounts","system:serviceaccounts:mynamespace"]}`))
+		case "/apis/user.openshift.io/v1/groups/openshell-users":
+			if r.Header.Get("Authorization") != "Bearer bridge-sa-token" {
+				http.Error(w, "forbidden: wrong token for group lookup", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-users"},"users":["system:serviceaccount:mynamespace:mysa","alice"]}`))
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer mock.Close()
+
+	t.Setenv("KUBERNETES_API_URL", mock.URL)
+
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("bridge-sa-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := testServer(t)
+	s.osc.SATokenPath = tokenFile
+	handler := s.Handler()
+
+	req := httptest.NewRequest("POST", "/token/exchange", nil)
+	req.Header.Set("Authorization", "Bearer sa-token-123")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["access_token"] == nil || resp["access_token"] == "" {
+		t.Error("access_token is empty")
+	}
+}
+
+func TestTokenExchangeServiceAccountNotInGroup(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/apis/user.openshift.io/v1/users/~":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"name":"system:serviceaccount:other:stranger","uid":"uid-stranger"},"groups":["system:authenticated","system:serviceaccounts"]}`))
+		case "/apis/user.openshift.io/v1/groups/openshell-users":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-users"},"users":["alice"]}`))
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer mock.Close()
+
+	t.Setenv("KUBERNETES_API_URL", mock.URL)
+
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("bridge-sa-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := testServer(t)
+	s.osc.SATokenPath = tokenFile
+	handler := s.Handler()
+
+	req := httptest.NewRequest("POST", "/token/exchange", nil)
+	req.Header.Set("Authorization", "Bearer stranger-token")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403 for SA not in group, body: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCheckGroupMemberships(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/apis/user.openshift.io/v1/groups/openshell-users":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-users"},"users":["system:serviceaccount:ns:mysa","alice"]}`))
+		case "/apis/user.openshift.io/v1/groups/openshell-admins":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-admins"},"users":["alice"]}`))
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer mock.Close()
+
+	t.Setenv("KUBERNETES_API_URL", mock.URL)
+
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("fake-sa-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	osc := NewOpenShiftClient(mock.URL, "test", "test")
+	osc.SATokenPath = tokenFile
+
+	tests := []struct {
+		name      string
+		username  string
+		groups    []string
+		wantMatch []string
+	}{
+		{"SA in user group", "system:serviceaccount:ns:mysa", []string{"openshell-users"}, []string{"openshell-users"}},
+		{"SA not in admin group", "system:serviceaccount:ns:mysa", []string{"openshell-admins"}, nil},
+		{"SA in user but not admin", "system:serviceaccount:ns:mysa", []string{"openshell-users", "openshell-admins"}, []string{"openshell-users"}},
+		{"nonexistent group", "system:serviceaccount:ns:mysa", []string{"nonexistent"}, nil},
+		{"empty groups", "system:serviceaccount:ns:mysa", []string{}, nil},
+		{"empty string group", "system:serviceaccount:ns:mysa", []string{""}, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matched, err := osc.checkGroupMemberships(context.Background(), tt.username, tt.groups)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(matched) != len(tt.wantMatch) {
+				t.Errorf("matched = %v, want %v", matched, tt.wantMatch)
+			}
+			for i := range matched {
+				if i < len(tt.wantMatch) && matched[i] != tt.wantMatch[i] {
+					t.Errorf("matched[%d] = %q, want %q", i, matched[i], tt.wantMatch[i])
+				}
+			}
+		})
 	}
 }
 
