@@ -23,7 +23,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -145,13 +144,12 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, g
 		Groups: raw.Groups,
 	}
 
-	if strings.HasPrefix(info.Name, "system:serviceaccount:") {
+	if strings.HasPrefix(info.Name, "system:serviceaccount:") && len(groupNames) > 0 {
 		extraGroups, err := c.checkGroupMemberships(ctx, info.Name, groupNames)
 		if err != nil {
-			log.Printf("warning: group CR lookup failed for %s: %v", info.Name, err)
-		} else {
-			info.Groups = append(info.Groups, extraGroups...)
+			return nil, fmt.Errorf("group CR lookup for %s: %w", info.Name, err)
 		}
+		info.Groups = append(info.Groups, extraGroups...)
 	}
 
 	return info, nil
