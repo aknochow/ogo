@@ -141,7 +141,7 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, g
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, fmt.Errorf("user info failed (%d): %s", resp.StatusCode, string(body))
 	}
 
@@ -230,6 +230,7 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 			Users []string `json:"users"`
 		}
 		err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&group)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
 		_ = resp.Body.Close()
 		if err != nil {
 			return nil, fmt.Errorf("decoding group %s: %w", groupName, err)
