@@ -165,7 +165,7 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, g
 	if strings.HasPrefix(info.Name, "system:serviceaccount:") && len(groupNames) > 0 {
 		extraGroups, err := c.checkGroupMemberships(ctx, info.Name, groupNames)
 		if err != nil {
-			return nil, fmt.Errorf("group CR lookup for %s: %w", info.Name, err)
+			return nil, fmt.Errorf("group CR lookup for %q: %w", info.Name, err)
 		}
 		seen := make(map[string]bool, len(info.Groups))
 		for _, g := range info.Groups {
@@ -209,7 +209,7 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 
 		resp, err := c.saHTTPClient.Do(req)
 		if err != nil {
-			return nil, fmt.Errorf("group lookup for %s: %w", groupName, err)
+			return nil, fmt.Errorf("group lookup for %q: %w", groupName, err)
 		}
 
 		if resp.StatusCode == http.StatusNotFound {
@@ -220,7 +220,7 @@ func (c *OpenShiftClient) checkGroupMemberships(ctx context.Context, username st
 		if resp.StatusCode != http.StatusOK {
 			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
 			_ = resp.Body.Close()
-			return nil, fmt.Errorf("group lookup for %s failed with status %d", groupName, resp.StatusCode)
+			return nil, fmt.Errorf("group lookup for %q failed with status %d", groupName, resp.StatusCode)
 		}
 
 		var group struct {
