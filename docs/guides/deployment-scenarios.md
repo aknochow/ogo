@@ -19,20 +19,21 @@ Type 4, check that out."
 ## Which type am I?
 
 ```
-Do you need OpenShift SSO / OIDC login for the openshell CLI?
+Is this a full/shared deployment on a real OpenShift cluster
+(the RDU/SNO shape), or a local single-node test cluster?
 │
-├─ No (mTLS, unauthenticated, or CI/automation) ──────────────┐
-│                                                              │
-└─ Yes ──────────────────────────────────────────────────────┐│
-                                                               ││
-Is this a local single-node test cluster (MINC/Kind/CRC),     ││
-or a real/shared OpenShift cluster?                           ││
-                                                               ││
-   Local, no SSO needed        → Type 1                       ││
-   Local, SSO needed           → Type 2                       ││
-   Real cluster, no SSO        → Type 3                       ││
-   Real cluster, with SSO      → Type 4                       ││
-                                                               ▼▼
+├─ Real cluster ────────────────────────────────────────────┐
+│                                                             │
+│    Need browser-based OpenShift SSO?                       │
+│      Yes  → Type 1 (Envoy Gateway + SSO, full production)  │
+│      No   → Type 2 (direct Route, mTLS)                    │
+│                                                             │
+└─ Local test cluster ───────────────────────────────────────┤
+                                                               │
+     Need to exercise SSO/OAuthClient/cert-manager code?      │
+       Yes → Type 3 (CRC, OpenShift preset)                   │
+       No  → Type 4 (MINC)                                    │
+                                                               ▼
 Are you connecting from a Dev Spaces workspace instead of a
 developer laptop?
    Same cluster, unauthenticated route  → Type 5
@@ -44,40 +45,56 @@ developer laptop?
 
 | Type | Scenario | Auth | TLS | Cluster | Guide |
 |------|----------|------|-----|---------|-------|
-| **1** | Local quick test | mTLS or unauthenticated | Self-signed | MINC / Kind | [Without Envoy Gateway](quickstart.md#without-envoy-gateway) |
-| **2** | Local full-featured test | OpenShift SSO | Self-signed or Let's Encrypt | CRC (OpenShift preset) | [With Envoy Gateway](quickstart.md#with-envoy-gateway) + [real-cluster testing](../../CONTRIBUTING.md#testing-against-a-real-cluster) |
-| **3** | Real cluster, direct Route | mTLS | Self-signed | Any real OpenShift | [Without Envoy Gateway](quickstart.md#without-envoy-gateway) |
-| **4** | Real cluster, Envoy Gateway | OpenShift SSO (browser) | Let's Encrypt via cert-manager | Any real OpenShift | [With Envoy Gateway](quickstart.md#with-envoy-gateway) |
+| **1** | Full production (RDU/SNO shape) | OpenShift SSO (browser) | Let's Encrypt via cert-manager | Any real OpenShift | [With Envoy Gateway](quickstart.md#with-envoy-gateway) |
+| **2** | Real cluster, direct Route | mTLS | Self-signed | Any real OpenShift | [Without Envoy Gateway](quickstart.md#without-envoy-gateway) |
+| **3** | Local full-featured test | OpenShift SSO | Self-signed or Let's Encrypt | CRC (OpenShift preset) | [With Envoy Gateway](quickstart.md#with-envoy-gateway) + [real-cluster testing](../../CONTRIBUTING.md#testing-against-a-real-cluster) |
+| **4** | Local quick test | mTLS or unauthenticated | Self-signed | MINC | [Without Envoy Gateway](quickstart.md#without-envoy-gateway) |
 | **5** | Dev Spaces, same cluster, no auth | None (`allowUnauthenticated`) | N/A (cluster-internal) | Same as Dev Spaces | [Same-cluster setup (simple)](devspaces.md#same-cluster-setup-simple) |
 | **6** | Dev Spaces, same cluster, with auth | Token exchange (OpenShift token → JWT) | Let's Encrypt (external Route) | Same as Dev Spaces | [Same-cluster setup (with auth)](devspaces.md#same-cluster-setup-with-auth) |
 | **7** | Dev Spaces, cross-cluster | Token exchange (OpenShift token → JWT) | Let's Encrypt (external Route) | Different from Dev Spaces | [Cross-cluster setup](devspaces.md#cross-cluster-setup) |
 
-## Type 1 — Local quick test (MINC / Kind)
+## Type 1 — Full production (RDU/SNO shape)
 
-Fastest iteration loop for developing the operator itself. No Envoy
-Gateway, no cert-manager, no OpenShift OAuth.
+The full production shape — this is what RDU runs, and what SNO mirrors
+for staging. Envoy Gateway fronts the gateway pod over the Gateway API,
+cert-manager issues a real Let's Encrypt certificate for the public
+hostname, and users log in via OpenShift SSO through the auth-bridge.
 
-- **Auth**: mTLS client certs, or `allow_unauthenticated_users` for pure
-  local iteration
-- **TLS**: operator-managed self-signed
-- **Cluster**: MINC (MicroShift) or Kind, driven by `make test-e2e` /
-  `make deploy` against a local kubeconfig
+- **Auth**: OpenShift SSO (browser login), backed by an external identity
+  provider (e.g. Red Hat SSO) configured on the cluster's OAuth config
+- **TLS**: Let's Encrypt via cert-manager on the Gateway API listener.
+  The gateway pod's *own* listener stays self-signed regardless — see
+  [Gateway concept](../concepts/gateway.md) and
+  [Authentication concept](../concepts/authentication.md) for why these
+  are two independent termination points, not a contradiction
+- **Prerequisites**: cert-manager, Envoy Gateway, Helm
 
-**Cannot test**: OpenShift SSO, `OAuthClient` reconciliation, real
-cert-manager/Let's Encrypt issuance. MINC and Kind do not have the
-`oauth.openshift.io`/`user.openshift.io` API groups at all — see
-[Testing against a real cluster](../../CONTRIBUTING.md#testing-against-a-real-cluster)
-for why this matters and when you need Type 2 or Type 3/4 instead.
+→ Follow [With Envoy Gateway](quickstart.md#with-envoy-gateway), then
+[OpenShift SSO](openshift-sso.md) for user group setup, then
+[Envoy Gateway](envoy-gateway.md) for ingress architecture details and
+troubleshooting.
+
+## Type 2 — Real cluster, direct Route (no Envoy Gateway)
+
+The simplest production-capable shape. An OpenShift Route passthroughs
+TLS directly to the gateway pod, which terminates it with its own
+self-signed certificate. No cert-manager, no Envoy Gateway, no Helm
+dependency.
+
+- **Auth**: mTLS client certificates (`spec.auth.openshift.enabled: false`)
+- **TLS**: operator-managed self-signed, `--gateway-insecure` on the CLI
+- **Use when**: you don't need browser-based SSO, or don't want the
+  Envoy Gateway/cert-manager dependency
 
 → Follow [Without Envoy Gateway](quickstart.md#without-envoy-gateway).
 
-## Type 2 — Local full-featured test (CRC with OpenShift preset)
+## Type 3 — Local full-featured test (CRC with OpenShift preset)
 
 CodeReady Containers with the full OpenShift preset (not the
 OKD/MicroShift-style preset) has the complete API surface, including
 `oauth.openshift.io`, so it's the only *local* option that can exercise
 SSO- and OAuthClient-related code before pushing to a shared cluster.
-Heavier than Type 1 (~8GB RAM) — use it when you're specifically
+Heavier than Type 4 (~8GB RAM) — use it when you're specifically
 validating auth-bridge, TLS, or Gateway API changes, not for routine
 iteration.
 
@@ -96,40 +113,28 @@ or `route.gatewayAPI`.
 → Follow [With Envoy Gateway](quickstart.md#with-envoy-gateway) for the
 CR shape, substituting CRC's kubeconfig and apps domain.
 
-## Type 3 — Real cluster, direct Route (no Envoy Gateway)
+## Type 4 — Local quick test (MINC)
 
-The simplest production-capable shape. An OpenShift Route passthroughs
-TLS directly to the gateway pod, which terminates it with its own
-self-signed certificate. No cert-manager, no Envoy Gateway, no Helm
-dependency.
+Fastest iteration loop for developing the operator itself. No Envoy
+Gateway, no cert-manager, no OpenShift OAuth.
 
-- **Auth**: mTLS client certificates (`spec.auth.openshift.enabled: false`)
-- **TLS**: operator-managed self-signed, `--gateway-insecure` on the CLI
-- **Use when**: you don't need browser-based SSO, or don't want the
-  Envoy Gateway/cert-manager dependency
+- **Auth**: mTLS client certs, or `allow_unauthenticated_users` for pure
+  local iteration
+- **TLS**: operator-managed self-signed
+- **Cluster**: MINC (MicroShift), driven by `make deploy` against a local
+  kubeconfig — this is the only local cluster type verified against both
+  the operator and the CI e2e suite (`test-e2e.yml` runs MINC). Kind is
+  still present as unused kubebuilder scaffolding (`make test-e2e`) but
+  hasn't been exercised for this project — don't reach for it until it's
+  actually verified
+
+**Cannot test**: OpenShift SSO, `OAuthClient` reconciliation, real
+cert-manager/Let's Encrypt issuance. MINC does not have the
+`oauth.openshift.io`/`user.openshift.io` API groups at all — see
+[Testing against a real cluster](../../CONTRIBUTING.md#testing-against-a-real-cluster)
+for why this matters and when you need Type 1, 2, or 3 instead.
 
 → Follow [Without Envoy Gateway](quickstart.md#without-envoy-gateway).
-
-## Type 4 — Real cluster, Envoy Gateway + OpenShift SSO
-
-The full production shape (this is what RDU runs). Envoy Gateway fronts
-the gateway pod over the Gateway API, cert-manager issues a real Let's
-Encrypt certificate for the public hostname, and users log in via
-OpenShift SSO through the auth-bridge.
-
-- **Auth**: OpenShift SSO (browser login), backed by an external identity
-  provider (e.g. Red Hat SSO) configured on the cluster's OAuth config
-- **TLS**: Let's Encrypt via cert-manager on the Gateway API listener.
-  The gateway pod's *own* listener stays self-signed regardless — see
-  [Gateway concept](../concepts/gateway.md) and
-  [Authentication concept](../concepts/authentication.md) for why these
-  are two independent termination points, not a contradiction
-- **Prerequisites**: cert-manager, Envoy Gateway, Helm
-
-→ Follow [With Envoy Gateway](quickstart.md#with-envoy-gateway), then
-[OpenShift SSO](openshift-sso.md) for user group setup, then
-[Envoy Gateway](envoy-gateway.md) for ingress architecture details and
-troubleshooting.
 
 ## Type 5 — Dev Spaces, same cluster, unauthenticated
 
@@ -165,4 +170,4 @@ connectivity from the Dev Spaces pod to the gateway cluster's Routes.
 - [Dev Spaces](devspaces.md) - all three Dev Spaces sub-scenarios in full detail
 - [OpenShift SSO](openshift-sso.md) - user groups, token lifetime, troubleshooting
 - [Envoy Gateway](envoy-gateway.md) - ingress architecture and troubleshooting
-- [CONTRIBUTING.md](../../CONTRIBUTING.md#testing-against-a-real-cluster) - why Types 1/2 differ in test coverage
+- [CONTRIBUTING.md](../../CONTRIBUTING.md#testing-against-a-real-cluster) - why Types 3/4 differ in test coverage
