@@ -43,6 +43,12 @@ type OpenShellGatewaySpec struct {
 	// +kubebuilder:default="ghcr.io/nvidia/openshell/supervisor"
 	SupervisorImage string `json:"supervisorImage,omitempty"`
 
+	// AuthBridgeImage overrides the auth-bridge sidecar image, including tag.
+	// Defaults to quay.io/aknochow/ogo-auth-bridge:latest when unset. A
+	// separate field from ImageTag since auth-bridge is our own image on an
+	// independent release cadence from the upstream gateway/supervisor images.
+	AuthBridgeImage string `json:"authBridgeImage,omitempty"`
+
 	// Replicas is the number of gateway pod replicas.
 	// +kubebuilder:default=1
 	// +kubebuilder:validation:Minimum=1

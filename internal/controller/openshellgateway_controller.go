@@ -1439,11 +1439,10 @@ func authBridgeEnabled(gw *ogov1alpha1.OpenShellGateway, isOCP bool) bool {
 }
 
 func authBridgeImage(gw *ogov1alpha1.OpenShellGateway) string {
-	tag := gw.Spec.ImageTag
-	if tag == "" {
-		tag = "latest"
+	if gw.Spec.AuthBridgeImage != "" {
+		return gw.Spec.AuthBridgeImage
 	}
-	return "quay.io/aknochow/ogo-auth-bridge:" + tag
+	return "quay.io/aknochow/ogo-auth-bridge:latest"
 }
 
 func domainSuffix(hostname string) string {

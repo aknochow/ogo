@@ -40,6 +40,15 @@ var (
 	// projectImage is the name of the image which will be built and loaded
 	// with the code source changes to be tested.
 	projectImage = envOrDefault("IMG", "quay.io/aknochow/ogo:v0.1.0")
+
+	// keepClusterAfterSuite leaves the operator and a running gateway deployed
+	// after the suite finishes instead of tearing everything down — turning
+	// the target cluster (e.g. SNO) into a persistent staging environment
+	// running whatever build was just tested. Declared here (not in
+	// e2e_real_cluster_test.go, despite being introduced for that suite)
+	// since the Manager suite's AfterAll in e2e_test.go also needs it, and
+	// both files must compile independently of which specs actually run.
+	keepClusterAfterSuite = os.Getenv("E2E_REAL_CLUSTER_KEEP") == "true"
 )
 
 // TestE2E runs the end-to-end (e2e) test suite for the project.

@@ -142,7 +142,7 @@ cleanup-test-e2e: ## Tear down the Kind cluster used for e2e tests
 	@$(KIND) delete cluster --name $(KIND_CLUSTER)
 
 .PHONY: test-e2e-real
-test-e2e-real: manifests generate fmt vet ## Run e2e tests against a real OpenShift cluster (set KUBECONFIG and IMG). Covers SSO/OAuthClient/cert-manager paths MINC can't.
+test-e2e-real: manifests generate fmt vet ## Run e2e tests against a real OpenShift cluster (set KUBECONFIG and IMG). Covers SSO/OAuthClient/cert-manager paths MINC can't. Set E2E_REAL_CLUSTER_KEEP=true to leave the build running as a staging deployment instead of tearing down.
 	@if [ -z "$$KUBECONFIG" ]; then \
 		echo "KUBECONFIG must point at a real OpenShift cluster (e.g. SNO) with cert-manager + SSO configured"; \
 		exit 1; \
