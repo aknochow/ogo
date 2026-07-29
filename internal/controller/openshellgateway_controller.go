@@ -1156,9 +1156,18 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 	// (e.g. promoting a new build to staging), and cert-manager won't
 	// reissue for a new hostname/issuer unless the Certificate spec itself
 	// is updated to request it.
-	existingDNSNames, _, _ := unstructured.NestedStringSlice(existing.Object, "spec", "dnsNames")
-	existingIssuerName, _, _ := unstructured.NestedString(existing.Object, "spec", "issuerRef", "name")
-	existingIssuerKind, _, _ := unstructured.NestedString(existing.Object, "spec", "issuerRef", "kind")
+	existingDNSNames, _, err := unstructured.NestedStringSlice(existing.Object, "spec", "dnsNames")
+	if err != nil {
+		return fmt.Errorf("reading existing Certificate dnsNames: %w", err)
+	}
+	existingIssuerName, _, err := unstructured.NestedString(existing.Object, "spec", "issuerRef", "name")
+	if err != nil {
+		return fmt.Errorf("reading existing Certificate issuerRef.name: %w", err)
+	}
+	existingIssuerKind, _, err := unstructured.NestedString(existing.Object, "spec", "issuerRef", "kind")
+	if err != nil {
+		return fmt.Errorf("reading existing Certificate issuerRef.kind: %w", err)
+	}
 	if slices.Equal(existingDNSNames, desiredDNSNames) &&
 		existingIssuerName == issuerName && existingIssuerKind == issuerKind {
 		return nil
@@ -1547,13 +1556,25 @@ func (r *OpenShellGatewayReconciler) reconcileOAuthClient(ctx context.Context, g
 	// cluster-scoped object (e.g. a redeploy onto a fresh namespace), which
 	// must not leave the OAuthClient pointing at a stale secret/redirect —
 	// that fails OIDC token exchange with "unauthorized_client".
-	existingSecret, _, _ := unstructured.NestedString(existing.Object, "secret")
-	existingRedirectURIs, _, _ := unstructured.NestedStringSlice(existing.Object, "redirectURIs")
-	if existingSecret == clientSecret && slices.Equal(existingRedirectURIs, []string{callbackURL}) {
+	existingSecret, _, err := unstructured.NestedString(existing.Object, "secret")
+	if err != nil {
+		return fmt.Errorf("reading existing OAuthClient secret: %w", err)
+	}
+	existingRedirectURIs, _, err := unstructured.NestedStringSlice(existing.Object, "redirectURIs")
+	if err != nil {
+		return fmt.Errorf("reading existing OAuthClient redirectURIs: %w", err)
+	}
+	existingGrantMethod, _, err := unstructured.NestedString(existing.Object, "grantMethod")
+	if err != nil {
+		return fmt.Errorf("reading existing OAuthClient grantMethod: %w", err)
+	}
+	if existingSecret == clientSecret && slices.Equal(existingRedirectURIs, []string{callbackURL}) &&
+		existingGrantMethod == "auto" {
 		return nil
 	}
 	existing.Object["secret"] = clientSecret
 	existing.Object["redirectURIs"] = []interface{}{callbackURL}
+	existing.Object["grantMethod"] = "auto"
 	return r.Update(ctx, existing)
 }
 
