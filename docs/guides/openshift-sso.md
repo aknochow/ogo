@@ -97,8 +97,12 @@ their token expires naturally.
 
 ### "authentication failed" after gateway restart
 
-The OAuthClient secret may be out of sync. The admin should delete both
-and let the operator recreate them:
+As of v0.2.1, the operator syncs the `OAuthClient` secret and redirect URI
+on every reconcile, so this self-heals within one reconcile loop (a few
+seconds) — no manual action needed.
+
+On older versions, or if the issue persists, force it by deleting both and
+letting the operator recreate them:
 
 ```bash
 oc delete secret openshell-oauth-client -n ogo
