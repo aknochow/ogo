@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -1116,10 +1117,7 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
 	err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: ns}, existing)
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		if _, discoveryErr := r.DiscoveryClient.ServerResourcesForGroupVersion("cert-manager.io/v1"); discoveryErr != nil {
 			return fmt.Errorf("cert-manager CRDs not installed — required for Gateway API TLS")
 		}
@@ -1134,21 +1132,56 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 	if issuerKind == "" {
 		issuerKind = "ClusterIssuer"
 	}
+	desiredDNSNames := []string{hostname}
 
-	cert := &unstructured.Unstructured{}
-	cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
-	cert.SetName(secretName)
-	cert.SetNamespace(ns)
-	cert.SetLabels(gatewayLabels(gw))
-	cert.Object["spec"] = map[string]interface{}{
-		"secretName": secretName,
-		"dnsNames":   []interface{}{hostname},
-		"issuerRef": map[string]interface{}{
-			"name": issuerName,
-			"kind": issuerKind,
-		},
+	if apierrors.IsNotFound(err) {
+		cert := &unstructured.Unstructured{}
+		cert.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+		cert.SetName(secretName)
+		cert.SetNamespace(ns)
+		cert.SetLabels(gatewayLabels(gw))
+		cert.Object["spec"] = map[string]interface{}{
+			"secretName": secretName,
+			"dnsNames":   []interface{}{hostname},
+			"issuerRef": map[string]interface{}{
+				"name": issuerName,
+				"kind": issuerKind,
+			},
+		}
+		return r.Create(ctx, cert)
 	}
-	return r.Create(ctx, cert)
+
+	// Keep the Certificate in sync with the CR's current desired state —
+	// route.Hostname or the issuer config can change between deployments
+	// (e.g. promoting a new build to staging), and cert-manager won't
+	// reissue for a new hostname/issuer unless the Certificate spec itself
+	// is updated to request it.
+	existingDNSNames, _, err := unstructured.NestedStringSlice(existing.Object, "spec", "dnsNames")
+	if err != nil {
+		return fmt.Errorf("reading existing Certificate dnsNames: %w", err)
+	}
+	existingIssuerName, _, err := unstructured.NestedString(existing.Object, "spec", "issuerRef", "name")
+	if err != nil {
+		return fmt.Errorf("reading existing Certificate issuerRef.name: %w", err)
+	}
+	existingIssuerKind, _, err := unstructured.NestedString(existing.Object, "spec", "issuerRef", "kind")
+	if err != nil {
+		return fmt.Errorf("reading existing Certificate issuerRef.kind: %w", err)
+	}
+	if slices.Equal(existingDNSNames, desiredDNSNames) &&
+		existingIssuerName == issuerName && existingIssuerKind == issuerKind {
+		return nil
+	}
+	if err := unstructured.SetNestedStringSlice(existing.Object, desiredDNSNames, "spec", "dnsNames"); err != nil {
+		return fmt.Errorf("updating Certificate dnsNames: %w", err)
+	}
+	if err := unstructured.SetNestedField(existing.Object, issuerName, "spec", "issuerRef", "name"); err != nil {
+		return fmt.Errorf("updating Certificate issuerRef.name: %w", err)
+	}
+	if err := unstructured.SetNestedField(existing.Object, issuerKind, "spec", "issuerRef", "kind"); err != nil {
+		return fmt.Errorf("updating Certificate issuerRef.kind: %w", err)
+	}
+	return r.Update(ctx, existing)
 }
 
 func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
@@ -1500,13 +1533,12 @@ func (r *OpenShellGatewayReconciler) reconcileOAuthClient(ctx context.Context, g
 	clientSecret := string(secret.Data["secret"])
 	callbackURL := authBridgeExternalURL(gw) + "/callback"
 
-	oauthClient := &unstructured.Unstructured{}
-	oauthClient.SetGroupVersionKind(schema.GroupVersionKind{Group: "oauth.openshift.io", Version: "v1", Kind: "OAuthClient"})
-
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "oauth.openshift.io", Version: "v1", Kind: "OAuthClient"})
 	err = r.Get(ctx, types.NamespacedName{Name: "openshell"}, existing)
 	if apierrors.IsNotFound(err) {
+		oauthClient := &unstructured.Unstructured{}
+		oauthClient.SetGroupVersionKind(schema.GroupVersionKind{Group: "oauth.openshift.io", Version: "v1", Kind: "OAuthClient"})
 		oauthClient.SetName("openshell")
 		oauthClient.SetLabels(gatewayLabels(gw))
 		oauthClient.Object["secret"] = clientSecret
@@ -1514,7 +1546,35 @@ func (r *OpenShellGatewayReconciler) reconcileOAuthClient(ctx context.Context, g
 		oauthClient.Object["redirectURIs"] = []interface{}{callbackURL}
 		return r.Create(ctx, oauthClient)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Keep an existing OAuthClient in sync. The namespace Secret is the
+	// source of truth and can be regenerated independently of this
+	// cluster-scoped object (e.g. a redeploy onto a fresh namespace), which
+	// must not leave the OAuthClient pointing at a stale secret/redirect —
+	// that fails OIDC token exchange with "unauthorized_client".
+	existingSecret, _, err := unstructured.NestedString(existing.Object, "secret")
+	if err != nil {
+		return fmt.Errorf("reading existing OAuthClient secret: %w", err)
+	}
+	existingRedirectURIs, _, err := unstructured.NestedStringSlice(existing.Object, "redirectURIs")
+	if err != nil {
+		return fmt.Errorf("reading existing OAuthClient redirectURIs: %w", err)
+	}
+	existingGrantMethod, _, err := unstructured.NestedString(existing.Object, "grantMethod")
+	if err != nil {
+		return fmt.Errorf("reading existing OAuthClient grantMethod: %w", err)
+	}
+	if existingSecret == clientSecret && slices.Equal(existingRedirectURIs, []string{callbackURL}) &&
+		existingGrantMethod == "auto" {
+		return nil
+	}
+	existing.Object["secret"] = clientSecret
+	existing.Object["redirectURIs"] = []interface{}{callbackURL}
+	existing.Object["grantMethod"] = "auto"
+	return r.Update(ctx, existing)
 }
 
 func generateOAuthSecret() string {
