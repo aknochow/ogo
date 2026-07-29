@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -1131,6 +1132,7 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 	if issuerKind == "" {
 		issuerKind = "ClusterIssuer"
 	}
+	desiredDNSNames := []string{hostname}
 
 	if apierrors.IsNotFound(err) {
 		cert := &unstructured.Unstructured{}
@@ -1149,16 +1151,26 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 		return r.Create(ctx, cert)
 	}
 
-	// Keep the Certificate's dnsNames in sync with the current hostname —
-	// route.Hostname can change between deployments (e.g. promoting a new
-	// build to staging), and cert-manager won't reissue for a new hostname
-	// unless the Certificate spec itself is updated to request it.
+	// Keep the Certificate in sync with the CR's current desired state —
+	// route.Hostname or the issuer config can change between deployments
+	// (e.g. promoting a new build to staging), and cert-manager won't
+	// reissue for a new hostname/issuer unless the Certificate spec itself
+	// is updated to request it.
 	existingDNSNames, _, _ := unstructured.NestedStringSlice(existing.Object, "spec", "dnsNames")
-	if len(existingDNSNames) == 1 && existingDNSNames[0] == hostname {
+	existingIssuerName, _, _ := unstructured.NestedString(existing.Object, "spec", "issuerRef", "name")
+	existingIssuerKind, _, _ := unstructured.NestedString(existing.Object, "spec", "issuerRef", "kind")
+	if slices.Equal(existingDNSNames, desiredDNSNames) &&
+		existingIssuerName == issuerName && existingIssuerKind == issuerKind {
 		return nil
 	}
-	if err := unstructured.SetNestedStringSlice(existing.Object, []string{hostname}, "spec", "dnsNames"); err != nil {
+	if err := unstructured.SetNestedStringSlice(existing.Object, desiredDNSNames, "spec", "dnsNames"); err != nil {
 		return fmt.Errorf("updating Certificate dnsNames: %w", err)
+	}
+	if err := unstructured.SetNestedField(existing.Object, issuerName, "spec", "issuerRef", "name"); err != nil {
+		return fmt.Errorf("updating Certificate issuerRef.name: %w", err)
+	}
+	if err := unstructured.SetNestedField(existing.Object, issuerKind, "spec", "issuerRef", "kind"); err != nil {
+		return fmt.Errorf("updating Certificate issuerRef.kind: %w", err)
 	}
 	return r.Update(ctx, existing)
 }
@@ -1537,7 +1549,7 @@ func (r *OpenShellGatewayReconciler) reconcileOAuthClient(ctx context.Context, g
 	// that fails OIDC token exchange with "unauthorized_client".
 	existingSecret, _, _ := unstructured.NestedString(existing.Object, "secret")
 	existingRedirectURIs, _, _ := unstructured.NestedStringSlice(existing.Object, "redirectURIs")
-	if existingSecret == clientSecret && len(existingRedirectURIs) == 1 && existingRedirectURIs[0] == callbackURL {
+	if existingSecret == clientSecret && slices.Equal(existingRedirectURIs, []string{callbackURL}) {
 		return nil
 	}
 	existing.Object["secret"] = clientSecret
