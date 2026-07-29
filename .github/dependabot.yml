@@ -14,9 +14,26 @@ updates:
     commit-message:
       prefix: "ci(deps):"
 
+  # NOTE: this entry likely never matches anything - Dependabot's docker
+  # ecosystem only scans a file literally named "Dockerfile", and this
+  # repo's real container definitions use the "Containerfile" naming
+  # convention (Containerfile, Containerfile.auth-bridge). Known gap,
+  # not fixed here - see hack/openshell-pins/ below for how we work
+  # around this for the one thing that does need Dependabot tracking.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: daily
     commit-message:
       prefix: "chore(deps):"
+
+  # Tracks NVIDIA OpenShell gateway/supervisor release tags via the
+  # never-built pin file at hack/openshell-pins/Dockerfile. See that
+  # file's header comment for why it's named "Dockerfile" instead of
+  # "Containerfile".
+  - package-ecosystem: docker
+    directory: /hack/openshell-pins
+    schedule:
+      interval: daily
+    commit-message:
+      prefix: "chore(openshell):"

@@ -13,6 +13,19 @@ make lint     # Run golangci-lint
 See [AGENTS.md](AGENTS.md) for project structure, versioning rules, and
 image ownership. See [docs/](docs/) for full documentation.
 
+## Upstream OpenShell version bumps
+
+The `ImageTag` default (`api/v1alpha1/openshellgateway_types.go`) pins the
+NVIDIA `gateway`/`supervisor` images to a specific tested version - it does
+not float on `:latest`. New upstream releases arrive as **Dependabot PRs**
+against `hack/openshell-pins/Dockerfile` (a pin-only file, never built - see
+its header comment), not manual edits. When Dependabot opens one,
+`.github/workflows/upstream-sync.yml` automatically syncs the `ImageTag`
+default, regenerates CRD manifests, and updates the docs version badge onto
+that same PR, so normal CI tests the new pin before anyone merges it. Merging
+a dependency-only bump (no other code changes) auto-tags a `vX.Y.Z-N`
+release - see `AGENTS.md`'s tag strategy table.
+
 ## Testing against a real cluster
 
 `make test` and the CI e2e suite (MINC) cover most changes, but MINC

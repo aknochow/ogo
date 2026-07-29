@@ -35,6 +35,10 @@ type OpenShellGatewaySpec struct {
 	Image string `json:"image,omitempty"`
 
 	// ImageTag overrides the default image tag for gateway and supervisor containers.
+	// Bare semver, no "v" prefix — NVIDIA tags ghcr.io/nvidia/openshell/{gateway,supervisor}
+	// as e.g. "0.0.92", not "v0.0.92". Kept in sync with hack/openshell-pins/Dockerfile
+	// by CI when Dependabot bumps that pin.
+	// +kubebuilder:default="0.0.92"
 	ImageTag string `json:"imageTag,omitempty"`
 	// TODO(aknochow): split into separate GatewayImageTag / SupervisorImageTag —
 	// shared tag causes pull failures when overriding only the gateway image.

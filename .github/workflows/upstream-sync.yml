@@ -1,12 +1,96 @@
 name: Upstream Sync
 
+# Detection of new NVIDIA OpenShell releases is Dependabot's job (see
+# .github/dependabot.yml's entry for /hack/openshell-pins) - it opens a PR
+# whenever it bumps a tag in hack/openshell-pins/Dockerfile. This workflow
+# has two responsibilities:
+#
+# 1. sync: on that PR, complete the bump by updating the ImageTag
+#    kubebuilder default, regenerating CRD manifests, and updating the
+#    OpenShell version badge - then push those changes onto the same PR
+#    branch so the PR's normal CI (lint/test/e2e) tests the new pin before
+#    anyone merges it.
+# 2. tag: on merge to main, if the merged commit ONLY touched the
+#    dependency-bump files (no other code changes), auto-tag a
+#    dependency-only release (vX.Y.Z-N) and push it, which triggers the
+#    normal release.yml build pipeline. Deliberate OGO releases (vX.Y.Z)
+#    stay a manual, human-triggered action - see AGENTS.md's tag strategy.
+#
+# Uses pull_request_target (not pull_request) because Dependabot PRs get a
+# read-only GITHUB_TOKEN under the normal pull_request trigger. Safe here
+# since Dependabot PRs are same-repo (never a fork) and the only action
+# taken is a mechanical sync of version strings the PR itself already
+# introduced.
+
 on:
-  schedule:
-    - cron: '17 * * * *'
+  pull_request_target:
+    paths:
+      - 'hack/openshell-pins/**'
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
   sync:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Parse and sync the new pinned version
+        id: sync
+        run: |
+          GATEWAY_TAG=$(grep -oP 'openshell/gateway:\K\S+' hack/openshell-pins/Dockerfile)
+          SUPERVISOR_TAG=$(grep -oP 'openshell/supervisor:\K\S+' hack/openshell-pins/Dockerfile)
+          if [ "${GATEWAY_TAG}" != "${SUPERVISOR_TAG}" ]; then
+            echo "gateway (${GATEWAY_TAG}) and supervisor (${SUPERVISOR_TAG}) tags diverged - ImageTag is shared, refusing to guess"
+            exit 1
+          fi
+          NEW_VERSION="${GATEWAY_TAG}"
+          OLD_VERSION=$(grep -oP 'OpenShell-v\K[\d.]+' docs.toml | head -1)
+
+          if [ "${NEW_VERSION}" = "${OLD_VERSION}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+
+          sed -i "s/kubebuilder:default=\"${OLD_VERSION}\"/kubebuilder:default=\"${NEW_VERSION}\"/" \
+            api/v1alpha1/openshellgateway_types.go
+          sed -i "s/OpenShell-v${OLD_VERSION}/OpenShell-v${NEW_VERSION}/g" docs.toml README.md
+
+      - name: Regenerate CRD manifests
+        if: steps.sync.outputs.changed == 'true'
+        run: make manifests
+
+      - name: Commit and push to PR branch
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          NEW_VERSION: ${{ steps.sync.outputs.new_version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(openshell): sync ImageTag default and docs badge to ${NEW_VERSION}"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+
+  tag:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -15,58 +99,33 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          fetch-depth: 0
+          fetch-depth: 2
           token: ${{ secrets.PAT_TOKEN }}
 
-      - name: Check upstream OpenShell release
+      - name: Check if this was a dependency-only bump
         id: check
         run: |
-          LATEST=$(curl -s https://api.github.com/repos/NVIDIA/OpenShell/releases/latest | jq -r .tag_name)
-          CURRENT=$(grep -oP 'OpenShell-v\K[\d.]+' docs.toml | head -1)
-          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
-          echo "latest_version=${LATEST#v}" >> "$GITHUB_OUTPUT"
-          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
-
-          if [ "${LATEST#v}" != "${CURRENT}" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "OpenShell updated: v${CURRENT} → ${LATEST}"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "OpenShell is current: v${CURRENT}"
+          CHANGED=$(git diff --name-only HEAD~1 HEAD)
+          echo "${CHANGED}"
+          if echo "${CHANGED}" | grep -qvE '^(hack/openshell-pins/|api/v1alpha1/openshellgateway_types\.go|config/crd/bases/|docs\.toml|README\.md)'; then
+            echo "dependency_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          if ! echo "${CHANGED}" | grep -q '^hack/openshell-pins/'; then
+            echo "dependency_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "dependency_only=true" >> "$GITHUB_OUTPUT"
 
-      - name: Update version references
-        if: steps.check.outputs.changed == 'true'
-        env:
-          OLD_VERSION: ${{ steps.check.outputs.current }}
-          NEW_VERSION: ${{ steps.check.outputs.latest_version }}
-        run: |
-          sed -i "s/OpenShell-v${OLD_VERSION}/OpenShell-v${NEW_VERSION}/g" docs.toml README.md
-          echo "Updated OpenShell badge: v${OLD_VERSION} → v${NEW_VERSION}"
-
-      - name: Compute release tag
-        if: steps.check.outputs.changed == 'true'
-        id: tag
+      - name: Compute and push dependency-bump tag
+        if: steps.check.outputs.dependency_only == 'true'
         run: |
           BASE=$(grep -oP 'VERSION \?= \K[\d.]+' Makefile)
-          NEW_TAG="v${BASE}-$(date -u +%y%m%d%H%M)"
-
-          echo "tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
-          echo "base=${BASE}" >> "$GITHUB_OUTPUT"
-          echo "Release tag: ${NEW_TAG}"
-
-      - name: Commit and tag
-        if: steps.check.outputs.changed == 'true'
-        env:
-          NEW_TAG: ${{ steps.tag.outputs.tag }}
-          OPENSHELL_VERSION: ${{ steps.check.outputs.latest }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && exit 0
-
-          git commit -m "chore: sync OpenShell ${OPENSHELL_VERSION}, tag ${NEW_TAG}"
-          git push origin main || exit 1
+          N=1
+          while git rev-parse "v${BASE}-${N}" >/dev/null 2>&1; do
+            N=$((N + 1))
+          done
+          NEW_TAG="v${BASE}-${N}"
+          echo "Tagging dependency-only bump: ${NEW_TAG}"
           git tag "${NEW_TAG}"
           git push origin "${NEW_TAG}"
