@@ -78,6 +78,29 @@ func hasGatewayClass(name string) bool {
 	return err == nil
 }
 
+// stagingAuthBridgeImage derives the matching ogo-auth-bridge image from the
+// controller image under test (e.g. quay.io/aknochow/ogo:baseline-abc123 ->
+// quay.io/aknochow/ogo-auth-bridge:baseline-abc123), so the KEEP staging
+// deployment actually exercises the auth-bridge fix being verified rather
+// than falling back to the operator's hardcoded :latest default.
+func stagingAuthBridgeImage(controllerImage string) string {
+	repo, tag, ok := strings.Cut(controllerImage, ":")
+	if !ok || repo == "" {
+		_, _ = fmt.Fprintf(GinkgoWriter,
+			"WARNING: could not derive auth-bridge image from %q (no tag) — "+
+				"staging CR will fall back to the operator's default :latest\n", controllerImage)
+		return ""
+	}
+	slash := strings.LastIndex(repo, "/")
+	if slash == -1 || repo[slash+1:] != "ogo" {
+		_, _ = fmt.Fprintf(GinkgoWriter,
+			"WARNING: could not derive auth-bridge image from %q (repo isn't .../ogo) — "+
+				"staging CR will fall back to the operator's default :latest\n", controllerImage)
+		return ""
+	}
+	return repo[:slash+1] + "ogo-auth-bridge:" + tag
+}
+
 func decodeBase64(s string) string {
 	b, err := base64.StdEncoding.DecodeString(s)
 	Expect(err).NotTo(HaveOccurred())
@@ -122,6 +145,55 @@ var _ = Describe("RealCluster", Ordered, func() {
 		if skipReason != "" {
 			return
 		}
+		if keepClusterAfterSuite {
+			By("leaving the operator deployed and applying a staging gateway CR (E2E_REAL_CLUSTER_KEEP=true)")
+			authBridgeLine := ""
+			if img := stagingAuthBridgeImage(projectImage); img != "" {
+				authBridgeLine = fmt.Sprintf("  authBridgeImage: %s\n", img)
+			}
+			// Mirrors RDU's actual production shape: Gateway API/Envoy fronting
+			// a public cert-manager (Let's Encrypt) cert, gateway pod itself
+			// plaintext internally. This is the whole point of the per-run
+			// unique hostname — a real, browser-trusted cert per staged build,
+			// not the self-signed direct-Route fallback.
+			//
+			// tls.enabled: false and tls.certManager.enabled: true are NOT
+			// contradictory despite both living under `tls` — the pod's own
+			// listener (gated by tls.enabled) and the Gateway API/Envoy
+			// listener's cert (gated by certManager.enabled, checked
+			// independently in reconcileGatewayAPI) are two separate
+			// termination points. Verified working end-to-end on RDU/SNO.
+			cr := fmt.Sprintf(`
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellGateway
+metadata:
+  name: openshell
+spec:
+  namespace: %s
+  database:
+    embedded: true
+  auth:
+    openshift:
+      userGroup: openshell-users
+      adminGroup: openshell-admins
+  tls:
+    enabled: false
+    certManager:
+      enabled: true
+      issuerName: letsencrypt
+      issuerKind: ClusterIssuer
+  route:
+    hostname: %s
+    gatewayAPI:
+      enabled: true
+%s`, namespace, realClusterHostname, authBridgeLine)
+			cmd := exec.Command("kubectl", "apply", "-f", "-")
+			cmd.Stdin = strings.NewReader(cr)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to apply staging gateway CR")
+			return
+		}
+
 		By("cleaning up gateway CR if still present")
 		cmd := exec.Command("kubectl", "delete", "openshellgateways", "openshell",
 			"--timeout=60s", "--ignore-not-found=true")

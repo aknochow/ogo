@@ -40,6 +40,16 @@ This is a hard requirement for changes in those areas at this stage of the
 project — MINC's blind spots have caused real regressions to land in
 reviewed, CI-green PRs before.
 
+### Promoting a build to staging
+
+Add `E2E_REAL_CLUSTER_KEEP=true` to leave the operator and a running
+gateway deployed after the suite finishes, instead of tearing everything
+down. This turns the target cluster into a persistent staging environment
+running whatever build was just verified — re-running `test-e2e-real` is
+idempotent against that leftover state, so promoting a new build is just
+running it again with a new `IMG`. SNO serves this role for RDU: verify a
+build there before it goes to RDU.
+
 ## Reporting Issues
 
 Open a [GitHub issue](https://github.com/aknochow/ogo/issues) with:

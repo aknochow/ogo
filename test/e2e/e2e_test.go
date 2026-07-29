@@ -77,11 +77,16 @@ var _ = Describe("Manager", Ordered, func() {
 	})
 
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
-	// and deleting the namespace.
+	// and deleting the namespace — unless E2E_REAL_CLUSTER_KEEP is set, in which case this suite
+	// leaves the operator running for the RealCluster suite (or a standalone run) to build on.
 	AfterAll(func() {
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
+
+		if keepClusterAfterSuite {
+			return
+		}
 
 		By("undeploying the controller-manager")
 		cmd = exec.Command("make", "undeploy")

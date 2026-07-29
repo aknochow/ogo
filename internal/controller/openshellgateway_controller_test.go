@@ -133,7 +133,10 @@ var _ = Describe("OpenShellGateway Controller", func() {
 
 		cr := &rbacv1.ClusterRole{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-node-reader"}, cr)).To(Succeed())
-		Expect(cr.Rules).To(HaveLen(2))
+		// tokenreviews:create, nodes:get/list/watch, and user.openshift.io
+		// groups:get (added so auth-bridge can look up Group CR membership
+		// for ServiceAccount identities — see checkGroupMemberships).
+		Expect(cr.Rules).To(HaveLen(3))
 
 		crb := &rbacv1.ClusterRoleBinding{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-node-reader"}, crb)).To(Succeed())
