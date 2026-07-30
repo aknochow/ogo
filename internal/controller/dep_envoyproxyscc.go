@@ -75,7 +75,14 @@ func (e *EnvoyProxySCCReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1
 	granted := 0
 	for i := range saList.Items {
 		sa := &saList.Items[i]
-		if !strings.HasPrefix(sa.Name, "envoy-") || sa.Name == "envoy-gateway" || sa.Name == "envoy-gateway-certgen" {
+		// "envoy-gateway-certgen" never existed as an SA name - the actual
+		// certgen SA (components.yaml) is "eg-gateway-helm-certgen", which
+		// already fails the "envoy-" prefix check above and needs no
+		// explicit exclusion. Kept as "eg-gateway-helm-certgen" here anyway
+		// so this exclusion list stays accurate/self-documenting rather
+		// than silently relying on the prefix check for a name that
+		// doesn't share it.
+		if !strings.HasPrefix(sa.Name, "envoy-") || sa.Name == "envoy-gateway" || sa.Name == "eg-gateway-helm-certgen" {
 			continue
 		}
 
