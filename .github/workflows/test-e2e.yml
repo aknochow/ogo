@@ -81,6 +81,8 @@ jobs:
           # step before `minc create` is even attempted, failing CI in a new
           # way every time this purely-diagnostic aid breaks.
           sudo minc config set log-level debug || true
+          # This is the actual required step - if minc itself is missing or
+          # broken, this fails loudly and clearly, unlike the line above.
           sudo minc create
           echo "Waiting for cluster to be ready..."
           sudo minc status

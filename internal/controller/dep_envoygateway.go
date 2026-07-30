@@ -42,6 +42,11 @@ import (
 
 const componentEnvoyGateway = "envoy-gateway"
 
+// staticGatewayClassName is the GatewayClass name hardcoded into the
+// embedded components.yaml manifest - it can't be templated per-CR, so the
+// auto-install path only ever works with this exact name.
+const staticGatewayClassName = "eg"
+
 type EnvoyGatewayReconciler struct {
 	client.Client
 	DiscoveryClient discovery.DiscoveryInterface
@@ -69,7 +74,8 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 	gc := &unstructured.Unstructured{}
 	gc.SetGroupVersionKind(gatewayClassGVK)
 	err := e.Get(ctx, types.NamespacedName{Name: gcName}, gc)
-	if err == nil {
+	alreadyInstalled := err == nil
+	if alreadyInstalled && !isOwnedByOGO(gc.GetLabels()) {
 		return metav1.Condition{
 			Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionTrue,
 			Reason: "External", Message: fmt.Sprintf("GatewayClass %q already exists", gcName),
@@ -81,40 +87,67 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 	// and this Get returns a client-side NoMatchError, not NotFound -
 	// treat it the same as "doesn't exist yet" so the install path below
 	// actually runs instead of erroring out before ever attempting it.
-	if !errors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+	if !alreadyInstalled && !errors.IsNotFound(err) && !meta.IsNoMatchError(err) {
 		return metav1.Condition{
 			Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
 			Reason: "CheckFailed", Message: fmt.Sprintf("Failed to check GatewayClass: %v", err),
 		}, err
 	}
-
-	log.Info("Installing Envoy Gateway", "version", envoygateway.Version)
+	// The embedded components.yaml is a static manifest - it can only ever
+	// create a GatewayClass literally named staticGatewayClassName. A
+	// custom gatewayClassName only makes sense with an externally-managed
+	// GatewayClass (the branch above); auto-installing here would silently
+	// create a class nothing references, since the Gateway resource this
+	// operator creates elsewhere points at the custom name instead.
+	if !alreadyInstalled && gcName != staticGatewayClassName {
+		return metav1.Condition{
+				Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
+				Reason: "InvalidConfig",
+				Message: fmt.Sprintf("route.gatewayAPI.gatewayClassName %q requires an externally-managed "+
+					"GatewayClass - the auto-install path can only create one named %q", gcName, staticGatewayClassName),
+			},
+			fmt.Errorf("custom gatewayClassName %q requires an externally-managed GatewayClass", gcName)
+	}
 
 	isOCP := openshift.IsOpenShift(e.DiscoveryClient)
 	hasGWAPICRDs := openshift.HasGatewayAPI(e.DiscoveryClient)
 
-	if !hasGWAPICRDs {
-		if err := e.applyManifestFile(ctx, "gatewayapi-crds.yaml", gw); err != nil {
+	// Skip re-applying manifests once we own an already-installed
+	// GatewayClass - applyManifestFile is idempotent, but there's no reason
+	// to repeat it every reconcile pass once the install has succeeded. The
+	// SCC grants below are NOT skipped in this case, though: if the
+	// original install pass got far enough to create the GatewayClass
+	// (components.yaml) but then failed the SCC grant (e.g. a transient API
+	// error), every later pass would otherwise see the GatewayClass already
+	// exists and report "External" forever, permanently masking a grant
+	// that never actually succeeded - the pods would never schedule, but
+	// the CR would report healthy indefinitely.
+	if !alreadyInstalled {
+		log.Info("Installing Envoy Gateway", "version", envoygateway.Version)
+
+		if !hasGWAPICRDs {
+			if err := e.applyManifestFile(ctx, "gatewayapi-crds.yaml", gw); err != nil {
+				return metav1.Condition{
+					Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
+					Reason: "InstallFailed", Message: fmt.Sprintf("Failed to install Gateway API CRDs: %v", err),
+				}, err
+			}
+			log.Info("Installed Gateway API CRDs")
+		}
+
+		if err := e.applyManifestFile(ctx, "envoygateway-crds.yaml", gw); err != nil {
 			return metav1.Condition{
 				Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
-				Reason: "InstallFailed", Message: fmt.Sprintf("Failed to install Gateway API CRDs: %v", err),
+				Reason: "InstallFailed", Message: fmt.Sprintf("Failed to install Envoy Gateway CRDs: %v", err),
 			}, err
 		}
-		log.Info("Installed Gateway API CRDs")
-	}
 
-	if err := e.applyManifestFile(ctx, "envoygateway-crds.yaml", gw); err != nil {
-		return metav1.Condition{
-			Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
-			Reason: "InstallFailed", Message: fmt.Sprintf("Failed to install Envoy Gateway CRDs: %v", err),
-		}, err
-	}
-
-	if err := e.applyManifestFile(ctx, "components.yaml", gw); err != nil {
-		return metav1.Condition{
-			Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
-			Reason: "InstallFailed", Message: fmt.Sprintf("Failed to install Envoy Gateway: %v", err),
-		}, err
+		if err := e.applyManifestFile(ctx, "components.yaml", gw); err != nil {
+			return metav1.Condition{
+				Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
+				Reason: "InstallFailed", Message: fmt.Sprintf("Failed to install Envoy Gateway: %v", err),
+			}, err
+		}
 	}
 
 	sccsSkipped := false
@@ -127,9 +160,7 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 		}
 	} else if isOCP {
 		sccsSkipped = true
-		log.Info("Skipping automatic SCC grants (route.gatewayAPI.grantSCCs: false) - " +
-			"the auto-installed Envoy Gateway pods won't schedule until the required SCCs " +
-			"(anyuid, for eg-gateway-helm-certgen and envoy-gateway) are granted separately")
+		log.Info("Automatic SCC grants skipped", "reason", "grantSCCs: false")
 	}
 
 	log.Info("Envoy Gateway installed", "version", envoygateway.Version)

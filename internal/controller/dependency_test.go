@@ -229,7 +229,7 @@ var _ = Describe("EnvoyGatewayReconciler Reconcile/Cleanup", func() {
 		}})
 	})
 
-	It("installs a ClusterIP EnvoyProxy and GatewayClass, then detects them as External on the next pass, and never deletes them on Cleanup", func() {
+	It("installs a ClusterIP EnvoyProxy and GatewayClass, keeps reporting Installed (not External) on later self-owned passes, and never deletes them on Cleanup", func() {
 		r := &EnvoyGatewayReconciler{
 			Client:          k8sClient,
 			DiscoveryClient: fake.NewSimpleClientset().Discovery(),
@@ -260,20 +260,41 @@ var _ = Describe("EnvoyGatewayReconciler Reconcile/Cleanup", func() {
 		paramsName, _, _ := unstructured.NestedString(gatewayClass.Object, "spec", "parametersRef", "name")
 		Expect(paramsName).To(Equal("openshift-clusterip"))
 
-		// Second pass: the GatewayClass now exists, so Reconcile should
-		// report External and not attempt to reinstall anything - this
-		// Reason flip (not "Installed" anymore) is exactly why Cleanup
-		// below must check the GatewayClass's own labels, not the
-		// persisted condition history.
+		// Second pass: the GatewayClass now exists AND is OGO-owned, so
+		// Reconcile skips re-applying manifests but still reports
+		// "Installed" (not "External" - that's reserved for a genuinely
+		// external, non-OGO-owned GatewayClass) and still retries the SCC
+		// grants. This matters: if the SCC grant transiently failed on the
+		// very first pass (after the GatewayClass was already created),
+		// every later pass used to see the GatewayClass already exists and
+		// report "External" forever, permanently masking a grant that never
+		// actually succeeded.
+		condition, err := r.Reconcile(ctx, gw())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(condition.Reason).To(Equal("Installed"))
+
+		// Cleanup is diagnostic-only - it must never delete the
+		// self-installed GatewayClass.
+		Expect(r.Cleanup(ctx, gw())).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, gatewayClass)).To(Succeed())
+	})
+
+	It("Reconcile reports External immediately for a GatewayClass OGO doesn't own", func() {
+		r := &EnvoyGatewayReconciler{
+			Client:          k8sClient,
+			DiscoveryClient: fake.NewSimpleClientset().Discovery(),
+		}
+		externalGC := &unstructured.Unstructured{}
+		externalGC.SetGroupVersionKind(gatewayClassGVK)
+		externalGC.SetName("eg")
+		externalGC.Object["spec"] = map[string]interface{}{
+			"controllerName": "gateway.envoyproxy.io/gatewayclass-controller",
+		}
+		Expect(k8sClient.Create(ctx, externalGC)).To(Succeed())
+
 		condition, err := r.Reconcile(ctx, gw())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(condition.Reason).To(Equal("External"))
-
-		// Cleanup is diagnostic-only - it must never delete the
-		// self-installed GatewayClass, even on a pass where Reconcile's
-		// own condition says "External".
-		Expect(r.Cleanup(ctx, gw())).To(Succeed())
-		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, gatewayClass)).To(Succeed())
 	})
 
 	It("Cleanup is a no-op for a GatewayClass OGO never created", func() {
@@ -294,6 +315,25 @@ var _ = Describe("EnvoyGatewayReconciler Reconcile/Cleanup", func() {
 		stillThere := &unstructured.Unstructured{}
 		stillThere.SetGroupVersionKind(gatewayClassGVK)
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, stillThere)).To(Succeed())
+	})
+
+	It("rejects a custom gatewayClassName on the auto-install path instead of silently installing a mismatched 'eg' GatewayClass", func() {
+		r := &EnvoyGatewayReconciler{
+			Client:          k8sClient,
+			DiscoveryClient: fake.NewSimpleClientset().Discovery(),
+		}
+		customNameGW := gw()
+		customNameGW.Spec.Route.GatewayAPI.GatewayClassName = "my-custom-class"
+
+		condition, err := r.Reconcile(ctx, customNameGW)
+		Expect(err).To(HaveOccurred())
+		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(condition.Reason).To(Equal("InvalidConfig"))
+
+		// Confirm it didn't fall back to installing the hardcoded "eg" name.
+		installedAnyway := &unstructured.Unstructured{}
+		installedAnyway.SetGroupVersionKind(gatewayClassGVK)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, installedAnyway)).NotTo(Succeed())
 	})
 })
 

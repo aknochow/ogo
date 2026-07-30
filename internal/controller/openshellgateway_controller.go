@@ -959,7 +959,7 @@ func gatewayClassName(gw *ogov1alpha1.OpenShellGateway) string {
 	if gw.Spec.Route.GatewayAPI.GatewayClassName != "" {
 		return gw.Spec.Route.GatewayAPI.GatewayClassName
 	}
-	return "eg"
+	return staticGatewayClassName
 }
 
 func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
