@@ -561,6 +561,16 @@ spec:
         image: envoyproxy/gateway:v1.3.2
         imagePullPolicy: IfNotPresent
         name: envoy-gateway-certgen
+        # runAsUser/runAsGroup/seccompProfile deliberately omitted here
+        # (present in upstream's chart, stripped for this embedded copy) -
+        # matches the --set-json certgen.job.securityContext.{runAsUser,
+        # runAsGroup,seccompProfile}=null overrides the manual "bring your
+        # own Envoy Gateway" docs already required on OpenShift. Confirmed
+        # live on SNO: with them set, anyuid SCC admission rejects the pod
+        # (fixed UID 65534 outside the namespace's allocated range, and a
+        # seccomp annotation OpenShift auto-derives from the modern field
+        # that anyuid's provider doesn't allow) - the certgen Job's pod
+        # never got created at all, every attempt hit FailedCreate.
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -568,11 +578,7 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
-          runAsGroup: 65534
           runAsNonRoot: true
-          runAsUser: 65534
-          seccompProfile:
-            type: RuntimeDefault
       imagePullSecrets: []
       restartPolicy: Never
       serviceAccountName: eg-gateway-helm-certgen

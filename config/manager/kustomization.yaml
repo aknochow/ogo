@@ -5,4 +5,4 @@ resources:
 images:
 - name: controller
   newName: quay.io/aknochow/ogo
-  newTag: baseline-ac73458
+  newTag: baseline-3fffd90
