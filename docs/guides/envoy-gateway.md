@@ -73,6 +73,34 @@ The operator will create:
 | `GatewayClass/eg` | (cluster-scoped) | Only if none exists yet (auto-install) |
 | `EnvoyProxy/openshift-clusterip` | envoy-gateway-system | Only if auto-installed - configures the proxy Service as `ClusterIP` |
 
+### Opting out of automatic SCC grants
+
+The auto-install path also grants the `anyuid` SCC to the two ServiceAccounts
+Envoy Gateway's own pods run as (their fixed non-root UIDs fall outside the
+namespace's allocated range) — this happens automatically by default. If
+your cluster's security policy requires granting SCCs through a separate,
+audited process instead of having the operator do it as a side effect of
+creating this CR, set:
+
+```yaml
+spec:
+  route:
+    gatewayAPI:
+      grantSCCs: false
+```
+
+With this set, the auto-installed `envoy-gateway` Deployment and
+`eg-gateway-helm-certgen` Job's pods won't schedule until you grant the
+same SCCs yourself:
+
+```bash
+oc adm policy add-scc-to-user anyuid -z envoy-gateway -n envoy-gateway-system
+oc adm policy add-scc-to-user anyuid -z eg-gateway-helm-certgen -n envoy-gateway-system
+```
+
+This only affects the auto-install path — it has no effect when
+`GatewayClass eg` already exists and OGO takes the External branch instead.
+
 ## Troubleshooting
 
 ### Gateway shows `Programmed: False`

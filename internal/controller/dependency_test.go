@@ -297,6 +297,35 @@ var _ = Describe("EnvoyGatewayReconciler Reconcile/Cleanup", func() {
 	})
 })
 
+var _ = Describe("shouldGrantSCCs", func() {
+	It("defaults to true when unset", func() {
+		g := &ogov1alpha1.OpenShellGateway{}
+		Expect(shouldGrantSCCs(g)).To(BeTrue())
+	})
+
+	It("is true when explicitly enabled", func() {
+		g := &ogov1alpha1.OpenShellGateway{
+			Spec: ogov1alpha1.OpenShellGatewaySpec{
+				Route: ogov1alpha1.RouteSpec{
+					GatewayAPI: ogov1alpha1.GatewayAPISpec{GrantSCCs: ptr.To(true)},
+				},
+			},
+		}
+		Expect(shouldGrantSCCs(g)).To(BeTrue())
+	})
+
+	It("is false when explicitly disabled", func() {
+		g := &ogov1alpha1.OpenShellGateway{
+			Spec: ogov1alpha1.OpenShellGatewaySpec{
+				Route: ogov1alpha1.RouteSpec{
+					GatewayAPI: ogov1alpha1.GatewayAPISpec{GrantSCCs: ptr.To(false)},
+				},
+			},
+		}
+		Expect(shouldGrantSCCs(g)).To(BeFalse())
+	})
+})
+
 var _ = Describe("databaseSecretName", func() {
 	It("should return secretName when set", func() {
 		gw := &ogov1alpha1.OpenShellGateway{

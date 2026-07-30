@@ -117,19 +117,33 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 		}, err
 	}
 
-	if isOCP {
+	sccsSkipped := false
+	if isOCP && shouldGrantSCCs(gw) {
 		if err := e.grantOpenShiftSCCs(ctx, gw); err != nil {
 			return metav1.Condition{
 				Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
 				Reason: "SCCFailed", Message: fmt.Sprintf("Failed to grant SCCs: %v", err),
 			}, err
 		}
+	} else if isOCP {
+		sccsSkipped = true
+		log.Info("Skipping automatic SCC grants (route.gatewayAPI.grantSCCs: false) - " +
+			"the auto-installed Envoy Gateway pods won't schedule until the required SCCs " +
+			"(anyuid, for eg-gateway-helm-certgen and envoy-gateway) are granted separately")
 	}
 
 	log.Info("Envoy Gateway installed", "version", envoygateway.Version)
+	message := fmt.Sprintf("Envoy Gateway %s installed by OGO", envoygateway.Version)
+	if sccsSkipped {
+		// Surface this in the condition, not just the log - the pods won't
+		// actually schedule without the SCC grants, and a bare "Installed"
+		// here would be exactly the kind of silent partial-success this PR
+		// otherwise exists to eliminate.
+		message += " (grantSCCs: false — SCC grants skipped, pods won't schedule until granted separately)"
+	}
 	return metav1.Condition{
 		Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionTrue,
-		Reason: "Installed", Message: fmt.Sprintf("Envoy Gateway %s installed by OGO", envoygateway.Version),
+		Reason: "Installed", Message: message,
 	}, nil
 }
 
@@ -252,6 +266,15 @@ func (e *EnvoyGatewayReconciler) applyManifests(ctx context.Context, data []byte
 		log.Info("Created resource", "kind", obj.GetKind(), "name", obj.GetName())
 	}
 	return nil
+}
+
+// shouldGrantSCCs reports whether the auto-install path should grant the
+// SCCs its own components need. Defaults to true (matching
+// InstallEnvoyGateway's default) so the auto-install path works out of the
+// box; set route.gatewayAPI.grantSCCs: false to grant them through a
+// separate, audited process instead.
+func shouldGrantSCCs(gw *ogov1alpha1.OpenShellGateway) bool {
+	return gw.Spec.Route.GatewayAPI.GrantSCCs == nil || *gw.Spec.Route.GatewayAPI.GrantSCCs
 }
 
 func (e *EnvoyGatewayReconciler) grantOpenShiftSCCs(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
