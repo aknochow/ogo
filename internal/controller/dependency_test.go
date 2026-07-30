@@ -24,7 +24,6 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -261,18 +260,39 @@ var _ = Describe("EnvoyGatewayReconciler Reconcile/Cleanup", func() {
 		Expect(paramsName).To(Equal("openshift-clusterip"))
 
 		// Second pass: the GatewayClass now exists, so Reconcile should
-		// report External and not attempt to reinstall anything.
+		// report External and not attempt to reinstall anything - this
+		// Reason flip (not "Installed" anymore) is exactly why Cleanup
+		// below must check the GatewayClass's own labels, not the
+		// persisted condition history.
 		condition, err := r.Reconcile(ctx, gw())
 		Expect(err).NotTo(HaveOccurred())
 		Expect(condition.Reason).To(Equal("External"))
 
 		// Cleanup is diagnostic-only - it must never delete the
-		// cluster-scoped resources it (or an external owner) is
-		// responsible for, regardless of the recorded Reason.
-		target := gw()
-		meta.SetStatusCondition(&target.Status.Conditions, condition)
-		Expect(r.Cleanup(ctx, target)).To(Succeed())
+		// self-installed GatewayClass, even on a pass where Reconcile's
+		// own condition says "External".
+		Expect(r.Cleanup(ctx, gw())).To(Succeed())
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, gatewayClass)).To(Succeed())
+	})
+
+	It("Cleanup is a no-op for a GatewayClass OGO never created", func() {
+		r := &EnvoyGatewayReconciler{
+			Client:          k8sClient,
+			DiscoveryClient: fake.NewSimpleClientset().Discovery(),
+		}
+		externalGC := &unstructured.Unstructured{}
+		externalGC.SetGroupVersionKind(gatewayClassGVK)
+		externalGC.SetName("eg")
+		externalGC.Object["spec"] = map[string]interface{}{
+			"controllerName": "gateway.envoyproxy.io/gatewayclass-controller",
+		}
+		Expect(k8sClient.Create(ctx, externalGC)).To(Succeed())
+
+		Expect(r.Cleanup(ctx, gw())).To(Succeed())
+
+		stillThere := &unstructured.Unstructured{}
+		stillThere.SetGroupVersionKind(gatewayClassGVK)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, stillThere)).To(Succeed())
 	})
 })
 

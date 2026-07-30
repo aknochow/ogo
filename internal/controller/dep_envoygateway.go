@@ -141,15 +141,24 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 // (when it did) and the commands to remove them, so a deliberate teardown
 // isn't a mystery - previously this was a silent no-op with no way to
 // tell whether OGO had installed anything at all.
+//
+// Ownership is checked via the GatewayClass's own labels, not the
+// persisted EnvoyGatewayReady condition's Reason - that Reason only says
+// "Installed" on the single reconcile pass that performed the install;
+// every later pass finds the (self-created) GatewayClass already exists
+// and reports "External" instead, since Reconcile can't distinguish
+// "exists because I made it" from "exists because someone else did" once
+// it's just doing an existence check. Labels don't have that problem.
 func (e *EnvoyGatewayReconciler) Cleanup(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
 	log := logf.FromContext(ctx)
-	cond := meta.FindStatusCondition(gw.Status.Conditions, ogov1alpha1.ConditionEnvoyGatewayReady)
-	if cond == nil {
-		log.Info("Envoy Gateway cleanup skipped — no EnvoyGatewayReady condition recorded, unknown whether OGO installed anything")
+	gc := &unstructured.Unstructured{}
+	gc.SetGroupVersionKind(gatewayClassGVK)
+	if err := e.Get(ctx, types.NamespacedName{Name: gatewayClassName(gw)}, gc); err != nil {
+		log.Info("Envoy Gateway cleanup skipped — no GatewayClass found, nothing to remove")
 		return nil
 	}
-	if cond.Reason != "Installed" {
-		log.Info("Envoy Gateway cleanup skipped — not installed by OGO (external GatewayClass), nothing to remove", "reason", cond.Reason)
+	if !isOwnedByOGO(gc.GetLabels()) {
+		log.Info("Envoy Gateway cleanup skipped — GatewayClass is not OGO-owned (external), nothing to remove")
 		return nil
 	}
 	log.Info("Envoy Gateway cleanup skipped — shared cluster component, remove manually if intended",
