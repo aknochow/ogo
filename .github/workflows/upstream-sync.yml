@@ -33,13 +33,18 @@ on:
 
 jobs:
   sync:
-    # Restricted to Dependabot's own actor identity - github.actor cannot be
-    # spoofed by a PR author, unlike file contents. Without this, any
-    # contributor to this public repo could open a PR touching
-    # hack/openshell-pins/** and get this job to check out their branch,
-    # run `make manifests` (arbitrary Go tooling) against it, and push the
-    # result using PAT_TOKEN's write access.
-    if: github.event_name == 'pull_request_target' && github.actor == 'dependabot[bot]'
+    # Restricted to Dependabot's own actor identity AND a dependabot/*
+    # branch name, checked here at the job level so neither the checkout
+    # nor `make manifests` (arbitrary Go tooling) ever runs against
+    # anything else. github.actor can't be spoofed by a PR author, unlike
+    # file contents - without this, any contributor to this public repo
+    # could open a PR touching hack/openshell-pins/** and get this job to
+    # check out their branch and run arbitrary code with PAT_TOKEN's write
+    # access.
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.actor == 'dependabot[bot]' &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -56,8 +61,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Parse and sync the new pinned version
-        id: sync
+      - name: Extract and validate pinned versions
+        id: versions
         run: |
           GATEWAY_TAG=$(grep -oP 'openshell/gateway:\K\S+' hack/openshell-pins/Dockerfile)
           SUPERVISOR_TAG=$(grep -oP 'openshell/supervisor:\K\S+' hack/openshell-pins/Dockerfile)
@@ -73,32 +78,34 @@ jobs:
           fi
           NEW_VERSION="${GATEWAY_TAG}"
           OLD_VERSION=$(grep -oP 'OpenShell-v\K[\d.]+' docs.toml | head -1)
-
+          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "old_version=${OLD_VERSION}" >> "$GITHUB_OUTPUT"
           if [ "${NEW_VERSION}" = "${OLD_VERSION}" ]; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            exit 0
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           fi
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
 
+      - name: Update source files to the new pinned version
+        if: steps.versions.outputs.changed == 'true'
+        env:
+          NEW_VERSION: ${{ steps.versions.outputs.new_version }}
+          OLD_VERSION: ${{ steps.versions.outputs.old_version }}
+        run: |
           sed -i "s/kubebuilder:default=\"${OLD_VERSION}\"/kubebuilder:default=\"${NEW_VERSION}\"/" \
             api/v1alpha1/openshellgateway_types.go
           sed -i "s/OpenShell-v${OLD_VERSION}/OpenShell-v${NEW_VERSION}/g" docs.toml README.md
 
       - name: Regenerate CRD manifests
-        if: steps.sync.outputs.changed == 'true'
+        if: steps.versions.outputs.changed == 'true'
         run: make manifests
 
       - name: Commit and push to PR branch
-        if: steps.sync.outputs.changed == 'true'
+        if: steps.versions.outputs.changed == 'true'
         env:
-          NEW_VERSION: ${{ steps.sync.outputs.new_version }}
+          NEW_VERSION: ${{ steps.versions.outputs.new_version }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
-          if ! echo "${HEAD_REF}" | grep -qP '^dependabot/'; then
-            echo "unexpected head ref '${HEAD_REF}' (expected a dependabot/* branch) - refusing to push"
-            exit 1
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -129,6 +136,10 @@ jobs:
           # as dependency-only.
           CHANGED=$(git diff-tree --no-commit-id --name-only -r HEAD)
           echo "${CHANGED}"
+          if [ -z "${CHANGED}" ]; then
+            echo "dependency_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if echo "${CHANGED}" | grep -qvE '^(hack/openshell-pins/.*|api/v1alpha1/openshellgateway_types\.go|config/crd/bases/.*|docs\.toml|README\.md)$'; then
             echo "dependency_only=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -143,6 +154,10 @@ jobs:
         if: steps.check.outputs.dependency_only == 'true'
         run: |
           BASE=$(grep -oP 'VERSION \?= \K[\d.]+' Makefile)
+          if ! echo "${BASE}" | grep -qP '^\d+\.\d+\.\d+$'; then
+            echo "Makefile VERSION '${BASE}' is not bare semver (X.Y.Z) - refusing to use it in git ls-remote/tag"
+            exit 1
+          fi
           # Check existing tags via the remote, not local `git rev-parse` -
           # this job's checkout has no fetch-depth override for tags, but
           # relying on local refs at all is fragile; ls-remote is always
