@@ -265,6 +265,18 @@ func (e *EnvoyGatewayReconciler) grantOpenShiftSCCs(ctx context.Context, gw *ogo
 			namespace: "envoy-gateway-system",
 			scc:       "anyuid",
 		},
+		{
+			// The main controller pod runs as a fixed UID (65532) that
+			// doesn't fall in the namespace's allocated SCC range - same
+			// grant the manual "bring your own Envoy Gateway" docs
+			// require as a separate step. Confirmed missing live on SNO:
+			// without it, the envoy-gateway Deployment never schedules a
+			// single pod (SCC admission rejects every provider).
+			name:      "envoy-gateway-privileged",
+			sa:        "envoy-gateway",
+			namespace: "envoy-gateway-system",
+			scc:       "privileged",
+		},
 	}
 
 	for _, b := range sccBindings {
