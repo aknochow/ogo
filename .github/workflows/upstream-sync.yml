@@ -1,12 +1,152 @@
 name: Upstream Sync
 
+# Detection of new NVIDIA OpenShell releases is Dependabot's job (see
+# .github/dependabot.yml's entry for /hack/openshell-pins) - it opens a PR
+# whenever it bumps a tag in hack/openshell-pins/Dockerfile. This workflow
+# has two responsibilities:
+#
+# 1. sync: on that PR, complete the bump by updating the ImageTag
+#    kubebuilder default, regenerating CRD manifests, and updating the
+#    OpenShell version badge - then push those changes onto the same PR
+#    branch so the PR's normal CI (lint/test/e2e) tests the new pin before
+#    anyone merges it.
+# 2. tag: on merge to main, if the merged commit ONLY touched the
+#    dependency-bump files (no other code changes), auto-tag a
+#    dependency-only release (vX.Y.Z-N) and push it, which triggers the
+#    normal release.yml build pipeline. Deliberate OGO releases (vX.Y.Z)
+#    stay a manual, human-triggered action - see AGENTS.md's tag strategy.
+#
+# Uses pull_request_target (not pull_request) because Dependabot PRs get a
+# read-only GITHUB_TOKEN under the normal pull_request trigger, and this
+# workflow needs write access to push the sync commit back. The security
+# boundary is the sync job's own `if:` condition (github.actor ==
+# 'dependabot[bot]' AND the head ref starts with 'dependabot/'), enforced
+# before the checkout step or anything else runs - not which ref gets
+# checked out. Both signals would need to be spoofed simultaneously (actor
+# identity can't be forged by a PR author) for an attacker to reach the
+# `make manifests` step with a malicious checkout.
+
 on:
-  schedule:
-    - cron: '17 * * * *'
-  workflow_dispatch:
+  pull_request_target:
+    paths:
+      - 'hack/openshell-pins/**'
+  push:
+    branches:
+      - main
+    paths:
+      - 'hack/openshell-pins/**'
 
 jobs:
   sync:
+    # Restricted to Dependabot's own actor identity AND a dependabot/*
+    # branch name, checked here at the job level so neither the checkout
+    # nor `make manifests` (arbitrary Go tooling) ever runs against
+    # anything else. github.actor can't be spoofed by a PR author, unlike
+    # file contents - without this, any contributor to this public repo
+    # could open a PR touching hack/openshell-pins/** and get this job to
+    # check out their branch and run arbitrary code with PAT_TOKEN's write
+    # access.
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.actor == 'dependabot[bot]' &&
+      startsWith(github.event.pull_request.head.ref, 'dependabot/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      # Checks out the PR head directly (not main) - checking out main and
+      # writing just the pin file's content back was tried and reverted:
+      # pushing that tree with --force-with-lease replaces the Dependabot
+      # branch's history with one rooted on main instead of Dependabot's
+      # own commit, which only happens to work when main hasn't moved
+      # since the PR opened. The job-level actor + branch-name guards above
+      # (enforced before this or any other step runs) are the actual
+      # security boundary here, not which ref gets checked out.
+      - name: Checkout PR head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          token: ${{ secrets.PAT_TOKEN }}
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Extract and validate pinned versions
+        id: versions
+        run: |
+          GATEWAY_TAG=$(grep -oP 'openshell/gateway:\K\S+' hack/openshell-pins/Dockerfile)
+          SUPERVISOR_TAG=$(grep -oP 'openshell/supervisor:\K\S+' hack/openshell-pins/Dockerfile)
+          for TAG in "${GATEWAY_TAG}" "${SUPERVISOR_TAG}"; do
+            if ! echo "${TAG}" | grep -qP '^\d+\.\d+\.\d+$'; then
+              echo "tag '${TAG}' is not bare semver (X.Y.Z) - refusing to use it in sed/git commands"
+              exit 1
+            fi
+          done
+          if [ "${GATEWAY_TAG}" != "${SUPERVISOR_TAG}" ]; then
+            echo "gateway (${GATEWAY_TAG}) and supervisor (${SUPERVISOR_TAG}) tags diverged - ImageTag is shared, refusing to guess"
+            exit 1
+          fi
+          NEW_VERSION="${GATEWAY_TAG}"
+          # Read from the kubebuilder default itself, not the docs.toml badge -
+          # that's the actual authoritative pin, and reading it avoids a
+          # first-run edge case where the PR head's docs.toml badge already
+          # has the new version (this same PR sets it), which would make
+          # OLD_VERSION == NEW_VERSION and skip the sync on the very first bump.
+          # The (?=") lookahead requires the quoted value to be *entirely*
+          # digits/dots - without it, other quoted defaults with a leading
+          # digit (e.g. "1Gi", "8h") would also partially match and corrupt
+          # OLD_VERSION with extra lines.
+          OLD_VERSION=$(grep -oP 'kubebuilder:default="\K\d+\.\d+\.\d+(?=")' api/v1alpha1/openshellgateway_types.go | head -1)
+          echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "old_version=${OLD_VERSION}" >> "$GITHUB_OUTPUT"
+          if [ "${NEW_VERSION}" = "${OLD_VERSION}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update source files to the new pinned version
+        if: steps.versions.outputs.changed == 'true'
+        env:
+          NEW_VERSION: ${{ steps.versions.outputs.new_version }}
+          OLD_VERSION: ${{ steps.versions.outputs.old_version }}
+        run: |
+          sed -i "s/kubebuilder:default=\"${OLD_VERSION}\"/kubebuilder:default=\"${NEW_VERSION}\"/" \
+            api/v1alpha1/openshellgateway_types.go
+          sed -i "s/OpenShell-v${OLD_VERSION}/OpenShell-v${NEW_VERSION}/g" docs.toml README.md
+
+      - name: Regenerate CRD manifests
+        if: steps.versions.outputs.changed == 'true'
+        run: make manifests
+
+      - name: Commit and push to PR branch
+        if: steps.versions.outputs.changed == 'true'
+        env:
+          NEW_VERSION: ${{ steps.versions.outputs.new_version }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! echo "${HEAD_REF}" | grep -qP '^[a-zA-Z0-9/_.-]+$'; then
+            echo "unexpected characters in HEAD_REF '${HEAD_REF}' - refusing to use it"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(openshell): sync ImageTag default and docs badge to ${NEW_VERSION}"
+          # Explicit expected-SHA form: the checkout above is a bare SHA
+          # (detached HEAD), which may not set up a refs/remotes/origin/*
+          # tracking ref for --force-with-lease's default comparison to
+          # use - stating HEAD_SHA explicitly needs no tracking ref and
+          # still fails safely if the branch moved since checkout.
+          git push --force-with-lease="${HEAD_REF}:${HEAD_SHA}" origin "HEAD:${HEAD_REF}"
+
+  tag:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -15,58 +155,58 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          fetch-depth: 0
+          fetch-depth: 2
           token: ${{ secrets.PAT_TOKEN }}
 
-      - name: Check upstream OpenShell release
+      - name: Check if this was a dependency-only bump
         id: check
         run: |
-          LATEST=$(curl -s https://api.github.com/repos/NVIDIA/OpenShell/releases/latest | jq -r .tag_name)
-          CURRENT=$(grep -oP 'OpenShell-v\K[\d.]+' docs.toml | head -1)
-          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
-          echo "latest_version=${LATEST#v}" >> "$GITHUB_OUTPUT"
-          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
-
-          if [ "${LATEST#v}" != "${CURRENT}" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "OpenShell updated: v${CURRENT} → ${LATEST}"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "OpenShell is current: v${CURRENT}"
+          # First-parent diff: "what did merging this PR change on main,
+          # relative to main immediately before". This is correct for both
+          # a squash-merge (single-parent commit, HEAD~1 is just its
+          # predecessor) and a normal 2-parent merge commit (HEAD~1 is the
+          # first parent, i.e. main before the merge - git's `diff-tree -r`
+          # on a bare merge commit shows only conflicting paths by default,
+          # not the actual incoming change set, so it's the wrong tool here
+          # despite being commonly recommended for "what changed in this
+          # commit").
+          CHANGED=$(git diff --name-only HEAD~1 HEAD)
+          echo "${CHANGED}"
+          if [ -z "${CHANGED}" ]; then
+            echo "dependency_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # Keep this allowlist in sync with the actual files the `sync` job
+          # (above) writes - if that job starts touching a new file, add it
+          # here too, or a legitimate dependency-only merge will fail this
+          # check and silently skip auto-tagging.
+          if echo "${CHANGED}" | grep -qvE '^(hack/openshell-pins/.*|api/v1alpha1/openshellgateway_types\.go|config/crd/bases/.*|bundle/manifests/.*|docs\.toml|README\.md)$'; then
+            echo "dependency_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! echo "${CHANGED}" | grep -q '^hack/openshell-pins/'; then
+            echo "dependency_only=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "dependency_only=true" >> "$GITHUB_OUTPUT"
 
-      - name: Update version references
-        if: steps.check.outputs.changed == 'true'
-        env:
-          OLD_VERSION: ${{ steps.check.outputs.current }}
-          NEW_VERSION: ${{ steps.check.outputs.latest_version }}
-        run: |
-          sed -i "s/OpenShell-v${OLD_VERSION}/OpenShell-v${NEW_VERSION}/g" docs.toml README.md
-          echo "Updated OpenShell badge: v${OLD_VERSION} → v${NEW_VERSION}"
-
-      - name: Compute release tag
-        if: steps.check.outputs.changed == 'true'
-        id: tag
+      - name: Compute and push dependency-bump tag
+        if: steps.check.outputs.dependency_only == 'true'
         run: |
           BASE=$(grep -oP 'VERSION \?= \K[\d.]+' Makefile)
-          NEW_TAG="v${BASE}-$(date -u +%y%m%d%H%M)"
-
-          echo "tag=${NEW_TAG}" >> "$GITHUB_OUTPUT"
-          echo "base=${BASE}" >> "$GITHUB_OUTPUT"
-          echo "Release tag: ${NEW_TAG}"
-
-      - name: Commit and tag
-        if: steps.check.outputs.changed == 'true'
-        env:
-          NEW_TAG: ${{ steps.tag.outputs.tag }}
-          OPENSHELL_VERSION: ${{ steps.check.outputs.latest }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && exit 0
-
-          git commit -m "chore: sync OpenShell ${OPENSHELL_VERSION}, tag ${NEW_TAG}"
-          git push origin main || exit 1
+          if ! echo "${BASE}" | grep -qP '^\d+\.\d+\.\d+$'; then
+            echo "Makefile VERSION '${BASE}' is not bare semver (X.Y.Z) - refusing to use it in git ls-remote/tag"
+            exit 1
+          fi
+          # Check existing tags via the remote, not local `git rev-parse` -
+          # this job's checkout has no fetch-depth override for tags, but
+          # relying on local refs at all is fragile; ls-remote is always
+          # authoritative regardless of what this checkout happened to fetch.
+          ESCAPED_BASE=$(echo "${BASE}" | sed 's/\./\\./g')
+          LAST=$(git ls-remote --tags origin "refs/tags/v${BASE}-*" \
+            | grep -oP "v${ESCAPED_BASE}-\K\d+" | sort -n | tail -1)
+          N=$(( ${LAST:-0} + 1 ))
+          NEW_TAG="v${BASE}-${N}"
+          echo "Tagging dependency-only bump: ${NEW_TAG}"
           git tag "${NEW_TAG}"
           git push origin "${NEW_TAG}"

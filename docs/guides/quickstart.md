@@ -111,7 +111,7 @@ oc get gatewayclasses
 ### 3. Deploy the operator
 
 ```bash
-make deploy IMG=quay.io/aknochow/ogo:main
+make deploy IMG=quay.io/aknochow/ogo:latest
 oc wait --for=condition=Available deployment/ogo-controller-manager -n ogo --timeout=120s
 ```
 
@@ -215,7 +215,7 @@ external prerequisites. Authentication uses mTLS client certificates.
 ### 1. Deploy the operator
 
 ```bash
-make deploy IMG=quay.io/aknochow/ogo:main
+make deploy IMG=quay.io/aknochow/ogo:latest
 oc wait --for=condition=Available deployment/ogo-controller-manager -n ogo --timeout=120s
 ```
 

@@ -32,6 +32,12 @@ Envoy Gateway ingress, and provides an auth-bridge for OpenShift SSO login.
 | Push to main | `:main` |
 | Release (`v0.1.0`) | `:v0.1.0` + `:latest` |
 | Pre-release (`v0.2.0-rc1`) | `:v0.2.0-rc1` |
+| Dependency-only bump (OpenShell version pin) | `:vX.Y.Z-N` (auto-tagged on merge; `N` increments per bump since the last real release, resets when one is cut) |
+
+Dependency-only bumps don't touch `:latest` — only a deliberate `vX.Y.Z`
+release does. See `hack/openshell-pins/Dockerfile` and
+`.github/workflows/upstream-sync.yml` for how these are detected
+(Dependabot) and tagged (auto, since no OGO code changes).
 
 ### Image Ownership - DO NOT CONFUSE
 
