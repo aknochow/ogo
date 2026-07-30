@@ -201,7 +201,9 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if isOCP {
 		if useGWAPI {
 			condition, err := r.reconcileEnvoyRoute(ctx, gw)
-			meta.SetStatusCondition(&gw.Status.Conditions, condition)
+			if condition.Type != "" {
+				meta.SetStatusCondition(&gw.Status.Conditions, condition)
+			}
 			if err != nil {
 				log.Error(err, "Failed to reconcile Envoy Route")
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "EnvoyRoute", err)
@@ -1193,10 +1195,12 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 // which was indistinguishable from success.
 func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (metav1.Condition, error) {
 	if gw.Spec.Route.Enabled != nil && !*gw.Spec.Route.Enabled {
-		return metav1.Condition{
-			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
-			Reason: "Disabled", Message: "route.enabled is false",
-		}, nil
+		// Zero-value Condition (empty Type) signals "nothing to report" to
+		// the call site, which skips SetStatusCondition entirely - a
+		// disabled route isn't "not ready", it's not applicable, and
+		// shouldn't leave a stale EnvoyRouteReady=False condition visible
+		// on a CR that will never use this code path.
+		return metav1.Condition{}, nil
 	}
 
 	hostname := gw.Spec.Route.Hostname
@@ -1308,7 +1312,23 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 	if deploy.Spec.Replicas != nil {
 		desiredReplicas = *deploy.Spec.Replicas
 	}
-	if deploy.Status.ReadyReplicas > 0 && deploy.Status.ReadyReplicas == desiredReplicas {
+	podsReady := deploy.Status.ReadyReplicas > 0 && deploy.Status.ReadyReplicas == desiredReplicas
+
+	// A Gateway API deployment isn't actually reachable until the Envoy
+	// Route bridges it, even once the gateway pod itself is Ready — without
+	// this check, Available/Phase reported "Running" purely from pod
+	// readiness while EnvoyRouteReady was still False (e.g.
+	// ProxyServiceNotFound), a silent partial-success this PR otherwise
+	// exists to eliminate. EnvoyRouteReady is only ever set when the
+	// Gateway API path is active, so its absence here means that path
+	// isn't in use and shouldn't block Available.
+	envoyRouteBlocking := false
+	if c := meta.FindStatusCondition(gw.Status.Conditions, ogov1alpha1.ConditionEnvoyRouteReady); c != nil && c.Status != metav1.ConditionTrue {
+		envoyRouteBlocking = true
+	}
+
+	switch {
+	case podsReady && !envoyRouteBlocking:
 		latest.Status.Phase = ogov1alpha1.PhaseRunning
 		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
 			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionTrue,
@@ -1318,7 +1338,17 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 			Type: ogov1alpha1.ConditionProgressing, Status: metav1.ConditionFalse,
 			Reason: "Complete", Message: "Rollout complete",
 		})
-	} else {
+	case podsReady && envoyRouteBlocking:
+		latest.Status.Phase = ogov1alpha1.PhaseCreating
+		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionFalse,
+			Reason: "EnvoyRouteNotReady", Message: "Waiting for the Envoy Gateway Route to become ready",
+		})
+		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionProgressing, Status: metav1.ConditionTrue,
+			Reason: "Deploying", Message: "Waiting for the Envoy Gateway Route",
+		})
+	default:
 		latest.Status.Phase = ogov1alpha1.PhaseCreating
 		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
 			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionFalse,

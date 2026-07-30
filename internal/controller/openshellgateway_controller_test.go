@@ -26,6 +26,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
@@ -204,6 +205,41 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
 		Expect(deploy.Spec.Template.Spec.Containers[0].Name).To(Equal("openshell-gateway"))
 		Expect(deploy.Spec.Template.Annotations).To(HaveKey("ogo.aknochow.io/config-hash"))
+	})
+
+	It("should not report Available while the Envoy Route isn't ready, even with pods Ready", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		deploy := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, deploy)).To(Succeed())
+		deploy.Status.Replicas = 1
+		deploy.Status.ReadyReplicas = 1
+		Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		// Simulates the auto-install path mid-flight: the gateway pod is
+		// Ready, but Envoy Gateway hasn't provisioned the proxy Service the
+		// Route bridges to yet — the exact state that used to report
+		// Available=True/Phase=Running despite there being no working
+		// ingress path at all.
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+			Reason: "ProxyServiceNotFound", Message: "waiting for proxy service",
+		})
+		Expect(k8sClient.Status().Update(ctx, gw)).To(Succeed())
+
+		Expect(r.updateStatus(ctx, gw)).To(Succeed())
+
+		updated := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(ogov1alpha1.PhaseCreating))
+		available := meta.FindStatusCondition(updated.Status.Conditions, ogov1alpha1.ConditionAvailable)
+		Expect(available).NotTo(BeNil())
+		Expect(available.Status).To(Equal(metav1.ConditionFalse))
+		Expect(available.Reason).To(Equal("EnvoyRouteNotReady"))
 	})
 
 	It("should create a Service", func() {

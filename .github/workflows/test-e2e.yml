@@ -54,6 +54,11 @@ jobs:
 
       - name: Create MINC cluster
         run: |
+          # Best-effort: this step runs under `bash -e`, so `|| true` is
+          # required here, not just tolerated — without it, a future minc
+          # version dropping/renaming this subcommand would abort the whole
+          # step before `minc create` is even attempted, failing CI in a new
+          # way every time this purely-diagnostic aid breaks.
           sudo minc config set log-level debug || true
           sudo minc create
           echo "Waiting for cluster to be ready..."
