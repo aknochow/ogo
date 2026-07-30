@@ -53,6 +53,14 @@ var (
 	clusterRoleBindingGVK = schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding"}
 )
 
+// isOwnedByOGO is a trust boundary, not a security boundary: it's a
+// label check, and any actor with write access to a resource can add or
+// remove this label themselves. It exists to stop OGO from accidentally
+// overwriting resources it didn't create (e.g. a manually-installed
+// GatewayClass), not to authenticate ownership against a hostile actor
+// who already has write access to the resource in question - a user who
+// can already edit ClusterRoleBindings/GatewayClasses directly doesn't
+// need to fool this check to change anything it protects.
 func isOwnedByOGO(labels map[string]string) bool {
 	return labels != nil && labels[labelProvisionedBy] == provisionedByOGO
 }

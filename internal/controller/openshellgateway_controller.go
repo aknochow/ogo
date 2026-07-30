@@ -1216,9 +1216,10 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 		"gateway.envoyproxy.io/owning-gateway-name":      gw.Name,
 		"gateway.envoyproxy.io/owning-gateway-namespace": gatewayNamespace(gw),
 	}); err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to list Envoy proxy services")
 		return metav1.Condition{
 				Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
-				Reason: "ListFailed", Message: fmt.Sprintf("Failed to list Envoy proxy services: %v", err),
+				Reason: "ListFailed", Message: "Failed to list Envoy proxy services - see operator logs for details",
 			},
 			fmt.Errorf("listing Envoy proxy services: %w", err)
 	}
@@ -1250,9 +1251,10 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 			"tls":  map[string]interface{}{"termination": "passthrough"},
 		}
 		if err := r.Create(ctx, route); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed to create Route")
 			return metav1.Condition{
 					Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
-					Reason: "CreateFailed", Message: fmt.Sprintf("Failed to create Route: %v", err),
+					Reason: "CreateFailed", Message: "Failed to create Route - see operator logs for details",
 				},
 				fmt.Errorf("creating envoy route: %w", err)
 		}
@@ -1262,9 +1264,10 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 		}, nil
 	}
 	if err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to get existing Route")
 		return metav1.Condition{
 				Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
-				Reason: "GetFailed", Message: fmt.Sprintf("Failed to get existing Route: %v", err),
+				Reason: "GetFailed", Message: "Failed to get existing Route - see operator logs for details",
 			},
 			fmt.Errorf("getting envoy route: %w", err)
 	}

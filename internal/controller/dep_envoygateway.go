@@ -88,9 +88,14 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 	// treat it the same as "doesn't exist yet" so the install path below
 	// actually runs instead of erroring out before ever attempting it.
 	if !alreadyInstalled && !errors.IsNotFound(err) && !meta.IsNoMatchError(err) {
+		// Message is intentionally generic - status.conditions is readable
+		// by any user with get access to the CR, and the underlying error
+		// can include internal API server details. Full error goes to the
+		// operator log instead.
+		log.Error(err, "Failed to check GatewayClass")
 		return metav1.Condition{
 			Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
-			Reason: "CheckFailed", Message: fmt.Sprintf("Failed to check GatewayClass: %v", err),
+			Reason: "CheckFailed", Message: "Failed to check GatewayClass - see operator logs for details",
 		}, err
 	}
 	// The embedded components.yaml is a static manifest - it can only ever
@@ -101,12 +106,11 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 	// operator creates elsewhere points at the custom name instead.
 	if !alreadyInstalled && gcName != staticGatewayClassName {
 		return metav1.Condition{
-				Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
-				Reason: "InvalidConfig",
-				Message: fmt.Sprintf("route.gatewayAPI.gatewayClassName %q requires an externally-managed "+
-					"GatewayClass - the auto-install path can only create one named %q", gcName, staticGatewayClassName),
-			},
-			fmt.Errorf("custom gatewayClassName %q requires an externally-managed GatewayClass", gcName)
+			Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
+			Reason: "InvalidConfig",
+			Message: fmt.Sprintf("route.gatewayAPI.gatewayClassName %q requires an externally-managed "+
+				"GatewayClass - the auto-install path can only create one named %q", gcName, staticGatewayClassName),
+		}, fmt.Errorf("custom gatewayClassName %q requires an externally-managed GatewayClass", gcName)
 	}
 
 	isOCP := openshift.IsOpenShift(e.DiscoveryClient)
@@ -127,25 +131,28 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 
 		if !hasGWAPICRDs {
 			if err := e.applyManifestFile(ctx, "gatewayapi-crds.yaml", gw); err != nil {
+				log.Error(err, "Failed to install Gateway API CRDs")
 				return metav1.Condition{
 					Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
-					Reason: "InstallFailed", Message: fmt.Sprintf("Failed to install Gateway API CRDs: %v", err),
+					Reason: "InstallFailed", Message: "Failed to install Gateway API CRDs - see operator logs for details",
 				}, err
 			}
 			log.Info("Installed Gateway API CRDs")
 		}
 
 		if err := e.applyManifestFile(ctx, "envoygateway-crds.yaml", gw); err != nil {
+			log.Error(err, "Failed to install Envoy Gateway CRDs")
 			return metav1.Condition{
 				Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
-				Reason: "InstallFailed", Message: fmt.Sprintf("Failed to install Envoy Gateway CRDs: %v", err),
+				Reason: "InstallFailed", Message: "Failed to install Envoy Gateway CRDs - see operator logs for details",
 			}, err
 		}
 
 		if err := e.applyManifestFile(ctx, "components.yaml", gw); err != nil {
+			log.Error(err, "Failed to install Envoy Gateway")
 			return metav1.Condition{
 				Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
-				Reason: "InstallFailed", Message: fmt.Sprintf("Failed to install Envoy Gateway: %v", err),
+				Reason: "InstallFailed", Message: "Failed to install Envoy Gateway - see operator logs for details",
 			}, err
 		}
 	}
@@ -153,9 +160,10 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 	sccsSkipped := false
 	if isOCP && shouldGrantSCCs(gw) {
 		if err := e.grantOpenShiftSCCs(ctx, gw); err != nil {
+			log.Error(err, "Failed to grant SCCs")
 			return metav1.Condition{
 				Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
-				Reason: "SCCFailed", Message: fmt.Sprintf("Failed to grant SCCs: %v", err),
+				Reason: "SCCFailed", Message: "Failed to grant SCCs - see operator logs for details",
 			}, err
 		}
 	} else if isOCP {
