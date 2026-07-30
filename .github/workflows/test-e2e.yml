@@ -54,9 +54,28 @@ jobs:
 
       - name: Create MINC cluster
         run: |
+          sudo minc config set log-level debug || true
           sudo minc create
           echo "Waiting for cluster to be ready..."
           sudo minc status
+
+      - name: Diagnose MINC failure
+        if: failure()
+        run: |
+          echo "=== podman info ==="
+          sudo podman info || true
+          echo "=== podman ps -a ==="
+          sudo podman ps -a || true
+          echo "=== podman version ==="
+          sudo podman version || true
+          echo "=== kernel/cgroup ==="
+          uname -a
+          cat /sys/fs/cgroup/cgroup.controllers 2>&1 || echo "no unified cgroup.controllers file"
+          mount | grep cgroup
+          echo "=== journalctl tail ==="
+          sudo journalctl -xe --no-pager | tail -200 || true
+          echo "=== dmesg tail ==="
+          sudo dmesg | tail -100 || true
 
       - name: Setup kubeconfig
         run: |
