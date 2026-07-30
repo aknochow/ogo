@@ -17,10 +17,14 @@ name: Upstream Sync
 #    stay a manual, human-triggered action - see AGENTS.md's tag strategy.
 #
 # Uses pull_request_target (not pull_request) because Dependabot PRs get a
-# read-only GITHUB_TOKEN under the normal pull_request trigger. Safe here
-# since Dependabot PRs are same-repo (never a fork) and the only action
-# taken is a mechanical sync of version strings the PR itself already
-# introduced.
+# read-only GITHUB_TOKEN under the normal pull_request trigger, and this
+# workflow needs write access to push the sync commit back. The security
+# boundary is the sync job's own `if:` condition (github.actor ==
+# 'dependabot[bot]' AND the head ref starts with 'dependabot/'), enforced
+# before the checkout step or anything else runs - not which ref gets
+# checked out. Both signals would need to be spoofed simultaneously (actor
+# identity can't be forged by a PR author) for an attacker to reach the
+# `make manifests` step with a malicious checkout.
 
 on:
   pull_request_target:
@@ -29,6 +33,8 @@ on:
   push:
     branches:
       - main
+    paths:
+      - 'hack/openshell-pins/**'
   workflow_dispatch:
 
 jobs:
@@ -50,27 +56,24 @@ jobs:
       contents: write
 
     steps:
-      # Checks out the trusted base branch, NOT the PR head - `make
-      # manifests` below runs controller-gen from this checkout, so it must
-      # never execute code from the PR itself. The pin file's *content* is
-      # pulled separately as inert data via `git show`, never as code.
-      - name: Checkout main
+      # Checks out the PR head directly (not main) - checking out main and
+      # writing just the pin file's content back was tried and reverted:
+      # pushing that tree with --force-with-lease replaces the Dependabot
+      # branch's history with one rooted on main instead of Dependabot's
+      # own commit, which only happens to work when main hasn't moved
+      # since the PR opened. The job-level actor + branch-name guards above
+      # (enforced before this or any other step runs) are the actual
+      # security boundary here, not which ref gets checked out.
+      - name: Checkout PR head
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: main
+          ref: ${{ github.event.pull_request.head.sha }}
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-
-      - name: Fetch the pin file's content from the PR (data only, not executed)
-        env:
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          git fetch --depth=1 origin "${HEAD_SHA}"
-          git show "${HEAD_SHA}:hack/openshell-pins/Dockerfile" > hack/openshell-pins/Dockerfile
 
       - name: Extract and validate pinned versions
         id: versions
@@ -181,8 +184,9 @@ jobs:
           # this job's checkout has no fetch-depth override for tags, but
           # relying on local refs at all is fragile; ls-remote is always
           # authoritative regardless of what this checkout happened to fetch.
+          ESCAPED_BASE=$(echo "${BASE}" | sed 's/\./\\./g')
           LAST=$(git ls-remote --tags origin "refs/tags/v${BASE}-*" \
-            | grep -oP "v${BASE}-\K\d+" | sort -n | tail -1)
+            | grep -oP "v${ESCAPED_BASE}-\K\d+" | sort -n | tail -1)
           N=$(( ${LAST:-0} + 1 ))
           NEW_TAG="v${BASE}-${N}"
           echo "Tagging dependency-only bump: ${NEW_TAG}"
