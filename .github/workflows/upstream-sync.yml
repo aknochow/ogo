@@ -35,7 +35,6 @@ on:
       - main
     paths:
       - 'hack/openshell-pins/**'
-  workflow_dispatch:
 
 jobs:
   sync:
