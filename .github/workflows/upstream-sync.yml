@@ -90,7 +90,16 @@ jobs:
             exit 1
           fi
           NEW_VERSION="${GATEWAY_TAG}"
-          OLD_VERSION=$(grep -oP 'OpenShell-v\K[\d.]+' docs.toml | head -1)
+          # Read from the kubebuilder default itself, not the docs.toml badge -
+          # that's the actual authoritative pin, and reading it avoids a
+          # first-run edge case where the PR head's docs.toml badge already
+          # has the new version (this same PR sets it), which would make
+          # OLD_VERSION == NEW_VERSION and skip the sync on the very first bump.
+          # The (?=") lookahead requires the quoted value to be *entirely*
+          # digits/dots - without it, other quoted defaults with a leading
+          # digit (e.g. "1Gi", "8h") would also partially match and corrupt
+          # OLD_VERSION with extra lines.
+          OLD_VERSION=$(grep -oP 'kubebuilder:default="\K\d+\.\d+\.\d+(?=")' api/v1alpha1/openshellgateway_types.go)
           echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "old_version=${OLD_VERSION}" >> "$GITHUB_OUTPUT"
           if [ "${NEW_VERSION}" = "${OLD_VERSION}" ]; then
@@ -167,6 +176,10 @@ jobs:
             echo "dependency_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          # Keep this allowlist in sync with the actual files the `sync` job
+          # (above) writes - if that job starts touching a new file, add it
+          # here too, or a legitimate dependency-only merge will fail this
+          # check and silently skip auto-tagging.
           if echo "${CHANGED}" | grep -qvE '^(hack/openshell-pins/.*|api/v1alpha1/openshellgateway_types\.go|config/crd/bases/.*|bundle/manifests/.*|docs\.toml|README\.md)$'; then
             echo "dependency_only=false" >> "$GITHUB_OUTPUT"
             exit 0
