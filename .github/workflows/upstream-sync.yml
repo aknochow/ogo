@@ -50,16 +50,27 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout PR head
+      # Checks out the trusted base branch, NOT the PR head - `make
+      # manifests` below runs controller-gen from this checkout, so it must
+      # never execute code from the PR itself. The pin file's *content* is
+      # pulled separately as inert data via `git show`, never as code.
+      - name: Checkout main
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: main
           token: ${{ secrets.PAT_TOKEN }}
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
+
+      - name: Fetch the pin file's content from the PR (data only, not executed)
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --depth=1 origin "${HEAD_SHA}"
+          git show "${HEAD_SHA}:hack/openshell-pins/Dockerfile" > hack/openshell-pins/Dockerfile
 
       - name: Extract and validate pinned versions
         id: versions
@@ -106,6 +117,10 @@ jobs:
           NEW_VERSION: ${{ steps.versions.outputs.new_version }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
+          if ! echo "${HEAD_REF}" | grep -qP '^[a-zA-Z0-9/_.-]+$'; then
+            echo "unexpected characters in HEAD_REF '${HEAD_REF}' - refusing to use it"
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
@@ -129,18 +144,22 @@ jobs:
       - name: Check if this was a dependency-only bump
         id: check
         run: |
-          # git diff-tree (not git diff HEAD~1) lists every file the commit
-          # actually changed regardless of merge strategy - git diff HEAD~1
-          # HEAD only looks at the first parent, so a merge commit could
-          # hide second-parent changes and misclassify a real code change
-          # as dependency-only.
-          CHANGED=$(git diff-tree --no-commit-id --name-only -r HEAD)
+          # First-parent diff: "what did merging this PR change on main,
+          # relative to main immediately before". This is correct for both
+          # a squash-merge (single-parent commit, HEAD~1 is just its
+          # predecessor) and a normal 2-parent merge commit (HEAD~1 is the
+          # first parent, i.e. main before the merge - git's `diff-tree -r`
+          # on a bare merge commit shows only conflicting paths by default,
+          # not the actual incoming change set, so it's the wrong tool here
+          # despite being commonly recommended for "what changed in this
+          # commit").
+          CHANGED=$(git diff --name-only HEAD~1 HEAD)
           echo "${CHANGED}"
           if [ -z "${CHANGED}" ]; then
             echo "dependency_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          if echo "${CHANGED}" | grep -qvE '^(hack/openshell-pins/.*|api/v1alpha1/openshellgateway_types\.go|config/crd/bases/.*|docs\.toml|README\.md)$'; then
+          if echo "${CHANGED}" | grep -qvE '^(hack/openshell-pins/.*|api/v1alpha1/openshellgateway_types\.go|config/crd/bases/.*|bundle/manifests/.*|docs\.toml|README\.md)$'; then
             echo "dependency_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
