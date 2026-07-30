@@ -232,6 +232,11 @@ func (e *EnvoyGatewayReconciler) applyManifests(ctx context.Context, data []byte
 				log.V(1).Info("resource already exists, skipping (create-once kind)", "kind", existing.GetKind(), "name", obj.GetName())
 				continue
 			}
+			if !isOwnedByOGO(existing.GetLabels()) {
+				log.Info("resource already exists and is not OGO-owned, skipping update to avoid overwriting it",
+					"kind", existing.GetKind(), "name", obj.GetName())
+				continue
+			}
 			obj.SetResourceVersion(existing.GetResourceVersion())
 			if err := e.Update(ctx, obj); err != nil {
 				return fmt.Errorf("updating %s/%s: %w", obj.GetKind(), obj.GetName(), err)

@@ -1194,7 +1194,7 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (metav1.Condition, error) {
 	if gw.Spec.Route.Enabled != nil && !*gw.Spec.Route.Enabled {
 		return metav1.Condition{
-			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionTrue,
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
 			Reason: "Disabled", Message: "route.enabled is false",
 		}, nil
 	}
@@ -1202,10 +1202,9 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 	hostname := gw.Spec.Route.Hostname
 	if hostname == "" {
 		return metav1.Condition{
-				Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
-				Reason: "HostnameMissing", Message: "route.hostname is required when using Gateway API",
-			},
-			fmt.Errorf("route.hostname is required when using Gateway API")
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+			Reason: "HostnameMissing", Message: "route.hostname is required when using Gateway API",
+		}, fmt.Errorf("route.hostname is required when using Gateway API")
 	}
 
 	svcList := &corev1.ServiceList{}
