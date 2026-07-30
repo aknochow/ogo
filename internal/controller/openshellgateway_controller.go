@@ -200,7 +200,9 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	if isOCP {
 		if useGWAPI {
-			if err := r.reconcileEnvoyRoute(ctx, gw); err != nil {
+			condition, err := r.reconcileEnvoyRoute(ctx, gw)
+			meta.SetStatusCondition(&gw.Status.Conditions, condition)
+			if err != nil {
 				log.Error(err, "Failed to reconcile Envoy Route")
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "EnvoyRoute", err)
 			}
@@ -1184,14 +1186,25 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 	return r.Update(ctx, existing)
 }
 
-func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+// reconcileEnvoyRoute bridges the OpenShift Route that fronts the
+// Envoy-managed proxy Service. It always returns a condition (not just an
+// error) so `oc get openshellgateway -o yaml` shows *why* the route isn't
+// up when it isn't - previously several no-route cases returned bare nil,
+// which was indistinguishable from success.
+func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (metav1.Condition, error) {
 	if gw.Spec.Route.Enabled != nil && !*gw.Spec.Route.Enabled {
-		return nil
+		return metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionTrue,
+			Reason: "Disabled", Message: "route.enabled is false",
+		}, nil
 	}
 
 	hostname := gw.Spec.Route.Hostname
 	if hostname == "" {
-		return nil
+		return metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+			Reason: "HostnameMissing", Message: "route.hostname is required when using Gateway API",
+		}, nil
 	}
 
 	svcList := &corev1.ServiceList{}
@@ -1199,10 +1212,19 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 		"gateway.envoyproxy.io/owning-gateway-name":      gw.Name,
 		"gateway.envoyproxy.io/owning-gateway-namespace": gatewayNamespace(gw),
 	}); err != nil {
-		return fmt.Errorf("listing Envoy proxy services: %w", err)
+		return metav1.Condition{
+				Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+				Reason: "ListFailed", Message: fmt.Sprintf("Failed to list Envoy proxy services: %v", err),
+			},
+			fmt.Errorf("listing Envoy proxy services: %w", err)
 	}
 	if len(svcList.Items) == 0 {
-		return nil
+		return metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+			Reason: "ProxyServiceNotFound",
+			Message: "Waiting for Envoy Gateway to provision the proxy Service " +
+				"(labeled gateway.envoyproxy.io/owning-gateway-name/-namespace) before the Route can be created",
+		}, nil
 	}
 
 	envoySvc := svcList.Items[0]
@@ -1223,9 +1245,29 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 			"port": map[string]interface{}{"targetPort": int64(10443)},
 			"tls":  map[string]interface{}{"termination": "passthrough"},
 		}
-		return r.Create(ctx, route)
+		if err := r.Create(ctx, route); err != nil {
+			return metav1.Condition{
+					Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+					Reason: "CreateFailed", Message: fmt.Sprintf("Failed to create Route: %v", err),
+				},
+				fmt.Errorf("creating envoy route: %w", err)
+		}
+		return metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionTrue,
+			Reason: "Created", Message: fmt.Sprintf("Route %s created for host %s", routeName, hostname),
+		}, nil
 	}
-	return err
+	if err != nil {
+		return metav1.Condition{
+				Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+				Reason: "GetFailed", Message: fmt.Sprintf("Failed to get existing Route: %v", err),
+			},
+			fmt.Errorf("getting envoy route: %w", err)
+	}
+	return metav1.Condition{
+		Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionTrue,
+		Reason: "Exists", Message: fmt.Sprintf("Route %s exists for host %s", routeName, hostname),
+	}, nil
 }
 
 // --- SCC Binding ---
@@ -1298,6 +1340,7 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		ogov1alpha1.ConditionDatabaseReady,
 		ogov1alpha1.ConditionEnvoyProxySCCReady,
 		ogov1alpha1.ConditionOpenShiftGroups,
+		ogov1alpha1.ConditionEnvoyRouteReady,
 	} {
 		if c := meta.FindStatusCondition(gw.Status.Conditions, condType); c != nil {
 			meta.SetStatusCondition(&latest.Status.Conditions, *c)

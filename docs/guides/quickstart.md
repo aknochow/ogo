@@ -18,18 +18,25 @@ Deploy OGO on an OpenShift cluster with PostgreSQL and the OpenShell gateway.
 
 | Path | Auth | TLS | Prerequisites |
 |------|------|-----|---------------|
-| **[With Envoy Gateway](#with-envoy-gateway)** | OpenShift SSO (browser login) | Let's Encrypt via cert-manager | cert-manager, Envoy Gateway, Helm |
+| **[With Envoy Gateway](#with-envoy-gateway)** | OpenShift SSO (browser login) | Let's Encrypt via cert-manager | cert-manager |
 | **[Without Envoy Gateway](#without-envoy-gateway)** | mTLS (client certificates) | Self-signed (operator-managed) | None |
 
 Envoy Gateway is required for OpenShift SSO because the OpenShell gateway
 needs the OIDC issuer on the same hostname as the gateway endpoint. Without
-Envoy, use mTLS client certificates or `port-forward` for access.
+Envoy, use mTLS client certificates or `port-forward` for access. OGO
+installs and configures Envoy Gateway itself — you don't need Helm or a
+manual install for the common case (see
+[Advanced: bring your own Envoy Gateway](#advanced-bring-your-own-envoy-gateway)
+if you already run it for other workloads).
 
 ---
 
 ## With Envoy Gateway
 
-This path gives you browser-based SSO login and Let's Encrypt TLS.
+This path gives you browser-based SSO login and Let's Encrypt TLS. OGO
+installs Envoy Gateway, its CRDs, a `GatewayClass`, and the Gateway API
+resources automatically when you create a CR with `route.gatewayAPI.enabled:
+true` — no manual Helm install needed.
 
 ### 1. Install cert-manager
 
@@ -61,61 +68,14 @@ spec:
 EOF
 ```
 
-### 2. Install Envoy Gateway
-
-The certgen pre-install hook runs as uid 65534, outside OpenShift's allowed
-UID range. Pre-create the namespace and service account, grant SCC, then
-install with the UID overridden.
- 
-IMPORTANT: On OpenShift 4.20+, Gateway API CRDs are managed by the Ingress Operator.
-Use `--skip-crds` to avoid conflicts. On 4.16-4.21, omit `--skip-crds`
-to let the Helm chart install the CRDs:
-
-```bash
-# 1. Pre-create namespace and certgen service account
-oc create namespace envoy-gateway-system
-oc create sa eg-gateway-helm-certgen -n envoy-gateway-system
-oc adm policy add-scc-to-user anyuid -z eg-gateway-helm-certgen -n envoy-gateway-system
-
-# 2. Install — override certgen UID so OpenShift assigns from the namespace range
-helm install eg oci://docker.io/envoyproxy/gateway-helm \
-  --version v1.3.2 -n envoy-gateway-system --skip-crds \
-  --set-json 'certgen.job.securityContext.runAsUser=null' \
-  --set-json 'certgen.job.securityContext.runAsGroup=null' \
-  --set-json 'certgen.job.securityContext.seccompProfile=null'
-
-# 3. Grant privileged SCC to the main controller service account
-oc adm policy add-scc-to-user privileged -z envoy-gateway -n envoy-gateway-system
-```
-
-Create the GatewayClass:
-
-```bash
-cat <<EOF | oc apply -f -
-apiVersion: gateway.networking.k8s.io/v1
-kind: GatewayClass
-metadata:
-  name: eg
-spec:
-  controllerName: gateway.envoyproxy.io/gatewayclass-controller
-EOF
-```
-
-Verify Envoy Gateway is ready:
-
-```bash
-oc get gatewayclasses
-# Should show: eg   ACCEPTED   True
-```
-
-### 3. Deploy the operator
+### 2. Deploy the operator
 
 ```bash
 make deploy IMG=quay.io/aknochow/ogo:latest
 oc wait --for=condition=Available deployment/ogo-controller-manager -n ogo --timeout=120s
 ```
 
-### 4. Set up PostgreSQL
+### 3. Set up PostgreSQL
 
 ```bash
 oc adm policy add-scc-to-user anyuid -z default -n ogo
@@ -127,7 +87,7 @@ oc create secret generic ogo-pg -n ogo \
   --from-literal=uri='postgresql://openshell:openshell@ogo-pg.ogo.svc:5432/openshell'
 ```
 
-### 5. Create user groups
+### 4. Create user groups
 
 ```bash
 oc adm groups new openshell-users
@@ -136,7 +96,7 @@ oc adm groups new openshell-admins
 oc adm groups add-users openshell-admins your-username
 ```
 
-### 6. Create the Gateway
+### 5. Create the Gateway
 
 Replace `your-cluster.example.com` with your cluster's apps domain:
 
@@ -163,7 +123,7 @@ spec:
   route:
     hostname: openshell.apps.your-cluster.example.com
     gatewayAPI:
-      gatewayClassName: eg
+      enabled: true
   auth:
     openshift:
       userGroup: openshell-users
@@ -178,15 +138,11 @@ spec:
 oc apply -f ogo-gateway.yaml
 ```
 
-Wait for the Envoy proxy to start. When Gateway API detects Envoy, it
-creates a dynamic ServiceAccount for the proxy. Grant it the privileged SCC:
-
-```bash
-# Find the Envoy proxy SA (created after the Gateway resource is reconciled)
-oc get sa -n envoy-gateway-system | grep envoy-ogo
-# Grant it privileged SCC
-oc adm policy add-scc-to-user privileged -z <envoy-sa-name> -n envoy-gateway-system
-```
+OGO installs Envoy Gateway (CRDs, controller, a `GatewayClass` named `eg`
+configured for a `ClusterIP` proxy Service — not a cloud `LoadBalancer`,
+which commonly fails outright on managed OpenShift clusters with a
+LoadBalancer quota), grants it the SCCs it needs, and bridges an OpenShift
+Route to it. No manual SCC-granting step needed.
 
 Verify the gateway is running:
 
@@ -195,7 +151,16 @@ oc get openshellgateway
 # Should show: openshell   Running   https://openshell.apps.your-cluster.example.com:443
 ```
 
-### 7. Connect
+If it's not `Running` after a couple minutes, check `status.conditions` for
+which stage is stuck (`EnvoyGatewayReady`, `EnvoyProxySCCReady`,
+`EnvoyRouteReady`) — each one reports a specific reason instead of just
+"not ready":
+
+```bash
+oc get openshellgateway openshell -o jsonpath='{.status.conditions}' | jq
+```
+
+### 6. Connect
 
 ```bash
 openshell gateway add https://openshell.apps.your-cluster.example.com \
@@ -203,6 +168,108 @@ openshell gateway add https://openshell.apps.your-cluster.example.com \
   --oidc-issuer https://openshell-auth.apps.your-cluster.example.com
 
 openshell sandbox create --gateway my-cluster
+```
+
+---
+
+## Advanced: bring your own Envoy Gateway
+
+If you already run Envoy Gateway on this cluster for other workloads,
+create its `GatewayClass` yourself (with the name you want to reference in
+`route.gatewayAPI.gatewayClassName`) before creating the OGO CR — OGO
+detects an existing `GatewayClass` and won't try to install its own.
+
+The certgen pre-install hook runs as uid 65534, outside OpenShift's allowed
+UID range. Pre-create the namespace and service account, grant SCC, then
+install with the UID overridden.
+
+IMPORTANT: `--skip-crds` skips *all* CRDs bundled in the Helm chart, not
+just the core `gateway.networking.k8s.io` ones that need skipping on
+OpenShift 4.20+ (managed by the Ingress Operator). It also throws out
+Envoy Gateway's own `gateway.envoyproxy.io` CRDs (`EnvoyProxy`,
+`ClientTrafficPolicy`, etc.), which nothing else provides — install those
+explicitly instead of relying on the Helm chart for them:
+
+```bash
+# 1. Pre-create namespace and certgen service account
+oc create namespace envoy-gateway-system
+oc create sa eg-gateway-helm-certgen -n envoy-gateway-system
+oc adm policy add-scc-to-user anyuid -z eg-gateway-helm-certgen -n envoy-gateway-system
+
+# 2. Install Envoy Gateway's own CRDs (skipped by --skip-crds below, and not
+#    covered by the OpenShift Ingress Operator's Gateway API CRD management)
+helm show crds oci://docker.io/envoyproxy/gateway-helm --version v1.3.2 > /tmp/eg-crds.yaml
+awk '
+BEGIN { doc = "" }
+/^---/ { if (doc ~ /group: gateway\.envoyproxy\.io/) print doc "---"; doc = ""; next }
+{ doc = doc $0 "\n" }
+END { if (doc ~ /group: gateway\.envoyproxy\.io/) print doc }
+' /tmp/eg-crds.yaml > /tmp/eg-envoyproxy-crds.yaml
+oc apply -f /tmp/eg-envoyproxy-crds.yaml --server-side
+
+# 3. Install — skip only the core Gateway API CRDs (OpenShift 4.20+ manages
+#    those), override certgen UID so OpenShift assigns from the namespace range
+helm install eg oci://docker.io/envoyproxy/gateway-helm \
+  --version v1.3.2 -n envoy-gateway-system --skip-crds \
+  --set-json 'certgen.job.securityContext.runAsUser=null' \
+  --set-json 'certgen.job.securityContext.runAsGroup=null' \
+  --set-json 'certgen.job.securityContext.seccompProfile=null'
+
+# 4. Grant privileged SCC to the main controller service account
+oc adm policy add-scc-to-user privileged -z envoy-gateway -n envoy-gateway-system
+```
+
+Create an `EnvoyProxy` so the managed proxy Service is `ClusterIP` (a cloud
+`LoadBalancer` — Envoy Gateway's own default — commonly fails outright on
+managed OpenShift clusters with a LoadBalancer quota), then reference it
+from the `GatewayClass`:
+
+```bash
+cat <<EOF | oc apply -f -
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: openshift-clusterip
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: ClusterIP
+EOF
+
+cat <<EOF | oc apply -f -
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: openshift-clusterip
+    namespace: envoy-gateway-system
+EOF
+```
+
+Verify Envoy Gateway is ready, then continue from
+[step 2](#2-deploy-the-operator) of the main path above:
+
+```bash
+oc get gatewayclasses
+# Should show: eg   ACCEPTED   True
+```
+
+**If you're retrying after an earlier failed attempt**, OGO's own
+auto-install may have already created cluster-scoped resources with names
+that collide with a fresh Helm install (`invalid ownership metadata` from
+Helm). Check for and remove them first:
+
+```bash
+oc get clusterrole,clusterrolebinding -l app.kubernetes.io/managed-by=ogo
+# If present, delete the ones matching eg-gateway-helm-* / envoy-gateway-*
 ```
 
 ---
@@ -312,10 +379,19 @@ oc delete groups openshell-users openshell-admins 2>/dev/null
 # 5. Delete the namespace
 oc delete ns ogo
 
-# 6. (If using Envoy Gateway) Remove Envoy Gateway
+# 6. (If using the manual "bring your own Envoy Gateway" path) remove it
 helm uninstall eg -n envoy-gateway-system
 oc delete ns envoy-gateway-system
 oc delete gatewayclass eg
+```
+
+If OGO auto-installed Envoy Gateway (the default "With Envoy Gateway" path),
+it doesn't remove it on CR deletion — it's a cluster-scoped shared
+component, so this is a deliberate choice, not an oversight. The operator
+logs the exact removal commands at CR-deletion time:
+
+```bash
+oc logs -n ogo deployment/ogo-controller-manager | grep -A2 "Envoy Gateway cleanup skipped"
 ```
 
 ## Next steps

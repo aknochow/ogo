@@ -292,6 +292,7 @@ const (
 	ConditionEnvoyGatewayReady  = "EnvoyGatewayReady"
 	ConditionOpenShiftGroups    = "OpenShiftGroupsReady"
 	ConditionEnvoyProxySCCReady = "EnvoyProxySCCReady"
+	ConditionEnvoyRouteReady    = "EnvoyRouteReady"
 )
 
 // Phase values for OpenShellGateway.

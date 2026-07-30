@@ -25,6 +25,7 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -74,7 +75,13 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 			Reason: "External", Message: fmt.Sprintf("GatewayClass %q already exists", gcName),
 		}, nil
 	}
-	if !errors.IsNotFound(err) {
+	// On a cluster where gateway.networking.k8s.io isn't registered at all
+	// yet (older OpenShift without the Ingress Operator's Gateway API CRDs,
+	// or vanilla Kubernetes), the client has no REST mapping for the Kind
+	// and this Get returns a client-side NoMatchError, not NotFound -
+	// treat it the same as "doesn't exist yet" so the install path below
+	// actually runs instead of erroring out before ever attempting it.
+	if !errors.IsNotFound(err) && !meta.IsNoMatchError(err) {
 		return metav1.Condition{
 			Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
 			Reason: "CheckFailed", Message: fmt.Sprintf("Failed to check GatewayClass: %v", err),
@@ -126,8 +133,30 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 	}, nil
 }
 
-func (e *EnvoyGatewayReconciler) Cleanup(ctx context.Context, _ *ogov1alpha1.OpenShellGateway) error {
-	logf.FromContext(ctx).Info("Envoy Gateway cleanup skipped — shared cluster component, remove manually if needed")
+// Cleanup deliberately never deletes anything - Envoy Gateway is a
+// cluster-scoped shared component, and OGO is meant to run as a single
+// singleton per cluster (per AGENTS.md), but auto-deleting a shared
+// install on CR deletion is still a bigger blast radius than a one-line
+// no-op justifies. Instead this logs exactly which resources OGO created
+// (when it did) and the commands to remove them, so a deliberate teardown
+// isn't a mystery - previously this was a silent no-op with no way to
+// tell whether OGO had installed anything at all.
+func (e *EnvoyGatewayReconciler) Cleanup(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	log := logf.FromContext(ctx)
+	cond := meta.FindStatusCondition(gw.Status.Conditions, ogov1alpha1.ConditionEnvoyGatewayReady)
+	if cond == nil {
+		log.Info("Envoy Gateway cleanup skipped — no EnvoyGatewayReady condition recorded, unknown whether OGO installed anything")
+		return nil
+	}
+	if cond.Reason != "Installed" {
+		log.Info("Envoy Gateway cleanup skipped — not installed by OGO (external GatewayClass), nothing to remove", "reason", cond.Reason)
+		return nil
+	}
+	log.Info("Envoy Gateway cleanup skipped — shared cluster component, remove manually if intended",
+		"removeNamespacedResources", "oc delete deployment,service,configmap,serviceaccount,job,gatewayclass,envoyproxy "+
+			"-l app.kubernetes.io/managed-by=ogo,ogo.aknochow.io/component=envoy-gateway -n envoy-gateway-system",
+		"removeClusterScopedResources", "oc delete clusterrole,clusterrolebinding "+
+			"-l app.kubernetes.io/managed-by=ogo,ogo.aknochow.io/component=envoy-gateway")
 	return nil
 }
 
@@ -182,8 +211,16 @@ func (e *EnvoyGatewayReconciler) applyManifests(ctx context.Context, data []byte
 		existing := obj.DeepCopy()
 		key := types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
 		if err := e.Get(ctx, key, existing); err == nil {
-			if existing.GetKind() == "CustomResourceDefinition" {
-				log.V(1).Info("CRD already exists, skipping", "name", obj.GetName())
+			// CRDs and Jobs are both create-once, never-update: a CRD's
+			// schema is already established, and a Job's spec.selector is
+			// server-assigned on creation and immutable afterward, so
+			// blindly re-submitting the manifest's spec as an Update
+			// always fails once the server has defaulted that field.
+			// eg-gateway-helm-certgen (this file's only Job) self-cleans
+			// via ttlSecondsAfterFinished anyway, so there's nothing to
+			// reconcile even if it were mutable.
+			if existing.GetKind() == "CustomResourceDefinition" || existing.GetKind() == "Job" {
+				log.V(1).Info("resource already exists, skipping (create-once kind)", "kind", existing.GetKind(), "name", obj.GetName())
 				continue
 			}
 			obj.SetResourceVersion(existing.GetResourceVersion())

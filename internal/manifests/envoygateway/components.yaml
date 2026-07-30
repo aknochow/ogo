@@ -577,3 +577,40 @@ spec:
       restartPolicy: Never
       serviceAccountName: eg-gateway-helm-certgen
   ttlSecondsAfterFinished: 30
+---
+# OGO addition (not from upstream envoyproxy/gateway-helm): default the
+# managed Envoy proxy Service to ClusterIP instead of LoadBalancer.
+# LoadBalancer is the generic Kubernetes-idiomatic default, but on
+# OpenShift the idiomatic ingress path is a Route, and requesting a
+# LoadBalancer Service outright fails on managed clusters (ROSA/OSD) that
+# cap services.loadbalancers at 0 via ResourceQuota - confirmed live
+# 2026-07-29. reconcileEnvoyRoute (openshellgateway_controller.go) bridges
+# this ClusterIP Service to an OpenShift Route regardless of Service type.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: openshift-clusterip
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: ClusterIP
+---
+# GatewayClass name "eg" matches gatewayClassName()'s Go-side default
+# (openshellgateway_controller.go) - a custom
+# route.gatewayAPI.gatewayClassName only works with an externally-managed
+# GatewayClass (the "External" reconcile path), not this auto-install path,
+# since this manifest is static and can't be templated per-CR.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: openshift-clusterip
+    namespace: envoy-gateway-system

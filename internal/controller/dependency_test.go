@@ -24,7 +24,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
@@ -197,6 +200,79 @@ var _ = Describe("EnvoyGatewayReconciler Enabled", func() {
 		}
 		gw := &ogov1alpha1.OpenShellGateway{}
 		Expect(r.Enabled(ctx, gw)).To(BeFalse())
+	})
+})
+
+var _ = Describe("EnvoyGatewayReconciler Reconcile/Cleanup", func() {
+	ctx := context.Background()
+
+	gw := func() *ogov1alpha1.OpenShellGateway {
+		return &ogov1alpha1.OpenShellGateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "envoy-test-gw"},
+			Spec: ogov1alpha1.OpenShellGatewaySpec{
+				Route: ogov1alpha1.RouteSpec{
+					GatewayAPI: ogov1alpha1.GatewayAPISpec{Enabled: ptr.To(true)},
+				},
+			},
+		}
+	}
+
+	AfterEach(func() {
+		_ = k8sClient.Delete(ctx, &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "GatewayClass",
+			"metadata":   map[string]interface{}{"name": "eg"},
+		}})
+		_ = k8sClient.Delete(ctx, &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "gateway.envoyproxy.io/v1alpha1",
+			"kind":       "EnvoyProxy",
+			"metadata":   map[string]interface{}{"name": "openshift-clusterip", "namespace": "envoy-gateway-system"},
+		}})
+	})
+
+	It("installs a ClusterIP EnvoyProxy and GatewayClass, then detects them as External on the next pass, and never deletes them on Cleanup", func() {
+		r := &EnvoyGatewayReconciler{
+			Client:          k8sClient,
+			DiscoveryClient: fake.NewSimpleClientset().Discovery(),
+		}
+
+		// First pass installs the Gateway API + Envoy Gateway CRDs and this
+		// package's GatewayClass/EnvoyProxy instances in the same call -
+		// CRD establishment isn't instant, so retry until it succeeds,
+		// mirroring how the real reconcile loop's RequeueAfter naturally
+		// self-heals this on a later pass.
+		Eventually(func(g Gomega) {
+			condition, err := r.Reconcile(ctx, gw())
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(condition.Reason).To(Equal("Installed"))
+		}, "30s", "500ms").Should(Succeed())
+
+		envoyProxy := &unstructured.Unstructured{}
+		envoyProxy.SetGroupVersionKind(schema.GroupVersionKind{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Kind: "EnvoyProxy"})
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "openshift-clusterip", Namespace: "envoy-gateway-system"}, envoyProxy)).To(Succeed())
+		serviceType, _, _ := unstructured.NestedString(envoyProxy.Object, "spec", "provider", "kubernetes", "envoyService", "type")
+		Expect(serviceType).To(Equal("ClusterIP"))
+		Expect(envoyProxy.GetLabels()[labelManagedBy]).To(Equal(provisionedByOGO))
+
+		gatewayClass := &unstructured.Unstructured{}
+		gatewayClass.SetGroupVersionKind(gatewayClassGVK)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, gatewayClass)).To(Succeed())
+		paramsName, _, _ := unstructured.NestedString(gatewayClass.Object, "spec", "parametersRef", "name")
+		Expect(paramsName).To(Equal("openshift-clusterip"))
+
+		// Second pass: the GatewayClass now exists, so Reconcile should
+		// report External and not attempt to reinstall anything.
+		condition, err := r.Reconcile(ctx, gw())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(condition.Reason).To(Equal("External"))
+
+		// Cleanup is diagnostic-only - it must never delete the
+		// cluster-scoped resources it (or an external owner) is
+		// responsible for, regardless of the recorded Reason.
+		target := gw()
+		meta.SetStatusCondition(&target.Status.Conditions, condition)
+		Expect(r.Cleanup(ctx, target)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, gatewayClass)).To(Succeed())
 	})
 })
 
