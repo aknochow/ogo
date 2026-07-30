@@ -30,6 +30,7 @@ Core building blocks of an OGO deployment.
 
 Step-by-step walkthroughs.
 
+- [Deployment Scenarios](guides/deployment-scenarios.md) - not sure where to start? find your numbered scenario type
 - [Quickstart](guides/quickstart.md) - deploy OGO on OpenShift in 10 minutes
 - [Envoy Gateway](guides/envoy-gateway.md) - gRPC ingress with Let's Encrypt TLS
 - [OpenShift SSO](guides/openshift-sso.md) - "Log in with OpenShift" for the CLI
