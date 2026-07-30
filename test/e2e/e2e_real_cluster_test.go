@@ -322,6 +322,91 @@ spec:
 		}, 3*time.Minute).Should(Succeed())
 	})
 
+	It("auto-installs Envoy Gateway with a ClusterIP proxy Service when no GatewayClass exists", func() {
+		// The only other Gateway API spec in this file always hits the
+		// "External" branch (skips unless a GatewayClass named "eg"
+		// already exists) - this is the "Installed" branch's only
+		// coverage against a real cluster. Deliberately conservative:
+		// skip rather than destroy a pre-existing GatewayClass, since
+		// this suite runs against shared real-cluster infrastructure
+		// (SNO/RDU) and tearing down someone else's Envoy Gateway
+		// install is not this test's call to make unattended.
+		if hasGatewayClass("eg") {
+			Skip("a GatewayClass named 'eg' already exists - remove it manually " +
+				"(see quickstart.md's Advanced section) to exercise the auto-install path")
+		}
+
+		By("applying a CR with Gateway API enabled and no pre-existing GatewayClass")
+		cr := fmt.Sprintf(`
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellGateway
+metadata:
+  name: openshell
+spec:
+  namespace: %s
+  database:
+    embedded: true
+  auth:
+    openshift:
+      userGroup: openshell-e2e-users
+  tls:
+    enabled: false
+    certManager:
+      enabled: true
+      issuerName: letsencrypt
+      issuerKind: ClusterIssuer
+  route:
+    hostname: %s
+    gatewayAPI:
+      enabled: true
+`, namespace, realClusterHostname)
+		cmd := exec.Command("kubectl", "apply", "-f", "-")
+		cmd.Stdin = strings.NewReader(cr)
+		_, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to apply gateway CR")
+
+		By("waiting for OGO to auto-install the GatewayClass and EnvoyProxy")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "gatewayclass", "eg")
+			_, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred(), "GatewayClass 'eg' should be auto-installed")
+		}, 2*time.Minute).Should(Succeed())
+
+		cmd = exec.Command("kubectl", "get", "envoyproxy", "openshift-clusterip",
+			"-n", "envoy-gateway-system", "-o", "jsonpath={.spec.provider.kubernetes.envoyService.type}")
+		out, err := utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(Equal("ClusterIP"), "the auto-installed EnvoyProxy should configure a ClusterIP Service")
+
+		By("waiting for Envoy Gateway to provision a ClusterIP proxy Service (not LoadBalancer)")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "service", "-n", "envoy-gateway-system",
+				"-l", "gateway.envoyproxy.io/owning-gateway-name=openshell",
+				"-o", "jsonpath={.items[0].spec.type}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(Equal("ClusterIP"),
+				"the Envoy proxy Service should be ClusterIP, never the LoadBalancer default "+
+					"that fails outright on managed OpenShift clusters with a loadbalancer-quota")
+		}, 3*time.Minute).Should(Succeed())
+
+		By("waiting for the bridging Route to be created and Admitted")
+		Eventually(func(g Gomega) {
+			cmd := exec.Command("kubectl", "get", "route", "openshell-gw", "-n", "envoy-gateway-system",
+				"-o", "jsonpath={.status.ingress[0].conditions[?(@.type=='Admitted')].status}")
+			out, err := utils.Run(cmd)
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(out).To(Equal("True"))
+		}, 2*time.Minute).Should(Succeed())
+
+		By("verifying the EnvoyRouteReady condition reports success, not a silent no-op")
+		cmd = exec.Command("kubectl", "get", "openshellgateway", "openshell",
+			"-o", "jsonpath={.status.conditions[?(@.type=='EnvoyRouteReady')].reason}")
+		out, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out).To(Equal("Created"))
+	})
+
 	It("keeps the OAuthClient secret in sync when the CR is deleted and recreated", func() {
 		cr := fmt.Sprintf(`
 apiVersion: gateway.ogo.aknochow.io/v1alpha1
