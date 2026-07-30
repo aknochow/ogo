@@ -99,7 +99,7 @@ jobs:
           # digits/dots - without it, other quoted defaults with a leading
           # digit (e.g. "1Gi", "8h") would also partially match and corrupt
           # OLD_VERSION with extra lines.
-          OLD_VERSION=$(grep -oP 'kubebuilder:default="\K\d+\.\d+\.\d+(?=")' api/v1alpha1/openshellgateway_types.go)
+          OLD_VERSION=$(grep -oP 'kubebuilder:default="\K\d+\.\d+\.\d+(?=")' api/v1alpha1/openshellgateway_types.go | head -1)
           echo "new_version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
           echo "old_version=${OLD_VERSION}" >> "$GITHUB_OUTPUT"
           if [ "${NEW_VERSION}" = "${OLD_VERSION}" ]; then
