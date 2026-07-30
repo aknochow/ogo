@@ -251,7 +251,8 @@ var _ = Describe("EnvoyGatewayReconciler Reconcile/Cleanup", func() {
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "openshift-clusterip", Namespace: "envoy-gateway-system"}, envoyProxy)).To(Succeed())
 		serviceType, _, _ := unstructured.NestedString(envoyProxy.Object, "spec", "provider", "kubernetes", "envoyService", "type")
 		Expect(serviceType).To(Equal("ClusterIP"))
-		Expect(envoyProxy.GetLabels()[labelManagedBy]).To(Equal(provisionedByOGO))
+		Expect(envoyProxy.GetLabels()[labelProvisionedBy]).To(Equal(provisionedByOGO))
+		Expect(envoyProxy.GetLabels()[labelManagedBy]).To(Equal(managedByValue))
 
 		gatewayClass := &unstructured.Unstructured{}
 		gatewayClass.SetGroupVersionKind(gatewayClassGVK)

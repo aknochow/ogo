@@ -431,6 +431,12 @@ spec:
           requests:
             cpu: 100m
             memory: 256Mi
+        # seccompProfile deliberately omitted, matching the certgen
+        # container below - the anyuid SCC provider that grants this fixed
+        # UID (65532, outside the namespace's allocated range) rejects the
+        # legacy seccomp annotation OpenShift auto-derives from this field.
+        # Confirmed live on SNO: with it set, the Deployment never schedules
+        # a single pod even after the anyuid ClusterRoleBinding is granted.
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -440,8 +446,6 @@ spec:
           runAsGroup: 65532
           runAsNonRoot: true
           runAsUser: 65532
-          seccompProfile:
-            type: RuntimeDefault
         volumeMounts:
         - mountPath: /config
           name: envoy-gateway-config

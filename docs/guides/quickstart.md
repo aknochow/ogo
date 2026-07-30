@@ -215,8 +215,17 @@ helm install eg oci://docker.io/envoyproxy/gateway-helm \
   --set-json 'certgen.job.securityContext.runAsGroup=null' \
   --set-json 'certgen.job.securityContext.seccompProfile=null'
 
-# 4. Grant privileged SCC to the main controller service account
-oc adm policy add-scc-to-user privileged -z envoy-gateway -n envoy-gateway-system
+# 4. Grant anyuid SCC to the main controller service account — same
+#    fixed-UID problem as certgen above (65532, outside the namespace's
+#    allocated range). anyuid allows an arbitrary fixed UID without
+#    granting privileged's host-level access.
+oc adm policy add-scc-to-user anyuid -z envoy-gateway -n envoy-gateway-system
+
+# 5. Remove the seccompProfile anyuid's provider rejects — same
+#    seccomp-annotation problem as certgen, but on the main Deployment's
+#    container, which the --set-json overrides above don't reach
+oc patch deployment envoy-gateway -n envoy-gateway-system --type=json \
+  -p='[{"op": "remove", "path": "/spec/template/spec/containers/0/securityContext/seccompProfile"}]'
 ```
 
 Create an `EnvoyProxy` so the managed proxy Service is `ClusterIP` (a cloud
@@ -387,11 +396,21 @@ oc delete gatewayclass eg
 
 If OGO auto-installed Envoy Gateway (the default "With Envoy Gateway" path),
 it doesn't remove it on CR deletion — it's a cluster-scoped shared
-component, so this is a deliberate choice, not an oversight. The operator
-logs the exact removal commands at CR-deletion time:
+component, so this is a deliberate choice, not an oversight. Check the
+operator logs to confirm whether it installed one:
 
 ```bash
-oc logs -n ogo deployment/ogo-controller-manager | grep -A2 "Envoy Gateway cleanup skipped"
+oc logs -n ogo deployment/ogo-controller-manager | grep "Envoy Gateway cleanup skipped"
+```
+
+If it did, remove the auto-installed resources with:
+
+```bash
+oc delete deployment,service,configmap,serviceaccount,job,gatewayclass,envoyproxy \
+  -l app.kubernetes.io/managed-by=ogo,ogo.aknochow.io/component=envoy-gateway \
+  -n envoy-gateway-system
+oc delete clusterrole,clusterrolebinding \
+  -l app.kubernetes.io/managed-by=ogo,ogo.aknochow.io/component=envoy-gateway
 ```
 
 ## Next steps

@@ -154,18 +154,18 @@ func (e *EnvoyGatewayReconciler) Cleanup(ctx context.Context, gw *ogov1alpha1.Op
 	gc := &unstructured.Unstructured{}
 	gc.SetGroupVersionKind(gatewayClassGVK)
 	if err := e.Get(ctx, types.NamespacedName{Name: gatewayClassName(gw)}, gc); err != nil {
-		log.Info("Envoy Gateway cleanup skipped — no GatewayClass found, nothing to remove")
-		return nil
+		if errors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			log.Info("Envoy Gateway cleanup skipped — no GatewayClass found, nothing to remove")
+			return nil
+		}
+		return fmt.Errorf("checking GatewayClass for cleanup: %w", err)
 	}
 	if !isOwnedByOGO(gc.GetLabels()) {
 		log.Info("Envoy Gateway cleanup skipped — GatewayClass is not OGO-owned (external), nothing to remove")
 		return nil
 	}
-	log.Info("Envoy Gateway cleanup skipped — shared cluster component, remove manually if intended",
-		"removeNamespacedResources", "oc delete deployment,service,configmap,serviceaccount,job,gatewayclass,envoyproxy "+
-			"-l app.kubernetes.io/managed-by=ogo,ogo.aknochow.io/component=envoy-gateway -n envoy-gateway-system",
-		"removeClusterScopedResources", "oc delete clusterrole,clusterrolebinding "+
-			"-l app.kubernetes.io/managed-by=ogo,ogo.aknochow.io/component=envoy-gateway")
+	log.Info("Envoy Gateway cleanup skipped — shared cluster component, remove manually if intended " +
+		"(see quickstart.md's Teardown section for the label-selector removal commands)")
 	return nil
 }
 
@@ -274,14 +274,16 @@ func (e *EnvoyGatewayReconciler) grantOpenShiftSCCs(ctx context.Context, gw *ogo
 		{
 			// The main controller pod runs as a fixed UID (65532) that
 			// doesn't fall in the namespace's allocated SCC range - same
-			// grant the manual "bring your own Envoy Gateway" docs
-			// require as a separate step. Confirmed missing live on SNO:
-			// without it, the envoy-gateway Deployment never schedules a
-			// single pod (SCC admission rejects every provider).
-			name:      "envoy-gateway-privileged",
+			// class of problem as the certgen binding above, same fix:
+			// anyuid allows an arbitrary fixed UID without granting the
+			// host-level access "privileged" would. Confirmed missing
+			// live on SNO: without an SCC granting this pod its fixed
+			// UID, the envoy-gateway Deployment never schedules a single
+			// pod (SCC admission rejects every default provider).
+			name:      "envoy-gateway-anyuid",
 			sa:        "envoy-gateway",
 			namespace: "envoy-gateway-system",
-			scc:       "privileged",
+			scc:       "anyuid",
 		},
 	}
 

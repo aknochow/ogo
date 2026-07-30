@@ -1202,9 +1202,10 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 	hostname := gw.Spec.Route.Hostname
 	if hostname == "" {
 		return metav1.Condition{
-			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
-			Reason: "HostnameMissing", Message: "route.hostname is required when using Gateway API",
-		}, nil
+				Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+				Reason: "HostnameMissing", Message: "route.hostname is required when using Gateway API",
+			},
+			fmt.Errorf("route.hostname is required when using Gateway API")
 	}
 
 	svcList := &corev1.ServiceList{}
