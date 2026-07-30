@@ -119,6 +119,7 @@ jobs:
         env:
           NEW_VERSION: ${{ steps.versions.outputs.new_version }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if ! echo "${HEAD_REF}" | grep -qP '^[a-zA-Z0-9/_.-]+$'; then
             echo "unexpected characters in HEAD_REF '${HEAD_REF}' - refusing to use it"
@@ -129,7 +130,12 @@ jobs:
           git add -A
           git diff --cached --quiet && exit 0
           git commit -m "chore(openshell): sync ImageTag default and docs badge to ${NEW_VERSION}"
-          git push --force-with-lease origin "HEAD:${HEAD_REF}"
+          # Explicit expected-SHA form: the checkout above is a bare SHA
+          # (detached HEAD), which may not set up a refs/remotes/origin/*
+          # tracking ref for --force-with-lease's default comparison to
+          # use - stating HEAD_SHA explicitly needs no tracking ref and
+          # still fails safely if the branch moved since checkout.
+          git push --force-with-lease="${HEAD_REF}:${HEAD_SHA}" origin "HEAD:${HEAD_REF}"
 
   tag:
     if: github.event_name == 'push'
