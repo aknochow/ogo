@@ -260,8 +260,14 @@ func (e *EnvoyGatewayReconciler) grantOpenShiftSCCs(ctx context.Context, gw *ogo
 		scc       string
 	}{
 		{
-			name:      "envoy-gateway-certgen-anyuid",
-			sa:        "envoy-gateway-certgen",
+			// The certgen Job's actual ServiceAccount (components.yaml) is
+			// "eg-gateway-helm-certgen" - this previously granted anyuid to
+			// a nonexistent "envoy-gateway-certgen" SA instead, so the
+			// grant never took effect since this binding was written.
+			// Confirmed live on SNO: the certgen Job's pod was permanently
+			// stuck at FailedCreate (SCC admission) without this fix.
+			name:      "eg-gateway-helm-certgen-anyuid",
+			sa:        "eg-gateway-helm-certgen",
 			namespace: "envoy-gateway-system",
 			scc:       "anyuid",
 		},
