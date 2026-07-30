@@ -59,6 +59,7 @@ img   = "https://img.shields.io/badge/OpenShell-v0.0.92-76b900?logo=nvidia&logoC
 [[project.nav]]
 "Guides" = [
   { "Overview" = "guides/index.md" },
+  { "Deployment Scenarios" = "guides/deployment-scenarios.md" },
   { "Quickstart" = "guides/quickstart.md" },
   { "Envoy Gateway" = "guides/envoy-gateway.md" },
   { "OpenShift SSO" = "guides/openshift-sso.md" },
