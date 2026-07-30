@@ -33,7 +33,13 @@ on:
 
 jobs:
   sync:
-    if: github.event_name == 'pull_request_target'
+    # Restricted to Dependabot's own actor identity - github.actor cannot be
+    # spoofed by a PR author, unlike file contents. Without this, any
+    # contributor to this public repo could open a PR touching
+    # hack/openshell-pins/** and get this job to check out their branch,
+    # run `make manifests` (arbitrary Go tooling) against it, and push the
+    # result using PAT_TOKEN's write access.
+    if: github.event_name == 'pull_request_target' && github.actor == 'dependabot[bot]'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -55,6 +61,12 @@ jobs:
         run: |
           GATEWAY_TAG=$(grep -oP 'openshell/gateway:\K\S+' hack/openshell-pins/Dockerfile)
           SUPERVISOR_TAG=$(grep -oP 'openshell/supervisor:\K\S+' hack/openshell-pins/Dockerfile)
+          for TAG in "${GATEWAY_TAG}" "${SUPERVISOR_TAG}"; do
+            if ! echo "${TAG}" | grep -qP '^\d+\.\d+\.\d+$'; then
+              echo "tag '${TAG}' is not bare semver (X.Y.Z) - refusing to use it in sed/git commands"
+              exit 1
+            fi
+          done
           if [ "${GATEWAY_TAG}" != "${SUPERVISOR_TAG}" ]; then
             echo "gateway (${GATEWAY_TAG}) and supervisor (${SUPERVISOR_TAG}) tags diverged - ImageTag is shared, refusing to guess"
             exit 1
@@ -81,13 +93,18 @@ jobs:
         if: steps.sync.outputs.changed == 'true'
         env:
           NEW_VERSION: ${{ steps.sync.outputs.new_version }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
         run: |
+          if ! echo "${HEAD_REF}" | grep -qP '^dependabot/'; then
+            echo "unexpected head ref '${HEAD_REF}' (expected a dependabot/* branch) - refusing to push"
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -A
           git diff --cached --quiet && exit 0
           git commit -m "chore(openshell): sync ImageTag default and docs badge to ${NEW_VERSION}"
-          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
+          git push --force-with-lease origin "HEAD:${HEAD_REF}"
 
   tag:
     if: github.event_name == 'push'
@@ -105,9 +122,14 @@ jobs:
       - name: Check if this was a dependency-only bump
         id: check
         run: |
-          CHANGED=$(git diff --name-only HEAD~1 HEAD)
+          # git diff-tree (not git diff HEAD~1) lists every file the commit
+          # actually changed regardless of merge strategy - git diff HEAD~1
+          # HEAD only looks at the first parent, so a merge commit could
+          # hide second-parent changes and misclassify a real code change
+          # as dependency-only.
+          CHANGED=$(git diff-tree --no-commit-id --name-only -r HEAD)
           echo "${CHANGED}"
-          if echo "${CHANGED}" | grep -qvE '^(hack/openshell-pins/|api/v1alpha1/openshellgateway_types\.go|config/crd/bases/|docs\.toml|README\.md)'; then
+          if echo "${CHANGED}" | grep -qvE '^(hack/openshell-pins/.*|api/v1alpha1/openshellgateway_types\.go|config/crd/bases/.*|docs\.toml|README\.md)$'; then
             echo "dependency_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -121,10 +143,13 @@ jobs:
         if: steps.check.outputs.dependency_only == 'true'
         run: |
           BASE=$(grep -oP 'VERSION \?= \K[\d.]+' Makefile)
-          N=1
-          while git rev-parse "v${BASE}-${N}" >/dev/null 2>&1; do
-            N=$((N + 1))
-          done
+          # Check existing tags via the remote, not local `git rev-parse` -
+          # this job's checkout has no fetch-depth override for tags, but
+          # relying on local refs at all is fragile; ls-remote is always
+          # authoritative regardless of what this checkout happened to fetch.
+          LAST=$(git ls-remote --tags origin "refs/tags/v${BASE}-*" \
+            | grep -oP "v${BASE}-\K\d+" | sort -n | tail -1)
+          N=$(( ${LAST:-0} + 1 ))
           NEW_TAG="v${BASE}-${N}"
           echo "Tagging dependency-only bump: ${NEW_TAG}"
           git tag "${NEW_TAG}"
