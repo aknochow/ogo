@@ -1212,7 +1212,7 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 	}
 
 	svcList := &corev1.ServiceList{}
-	if err := r.List(ctx, svcList, client.MatchingLabels{
+	if err := r.List(ctx, svcList, client.InNamespace(envoyGatewaySystemNS), client.MatchingLabels{
 		"gateway.envoyproxy.io/owning-gateway-name":      gw.Name,
 		"gateway.envoyproxy.io/owning-gateway-namespace": gatewayNamespace(gw),
 	}); err != nil {
@@ -1289,14 +1289,17 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 	existingHost, _, _ := unstructured.NestedString(existing.Object, "spec", "host")
 	existingToName, _, _ := unstructured.NestedString(existing.Object, "spec", "to", "name")
 	if existingHost != hostname || existingToName != envoySvc.Name {
-		if err := r.Delete(ctx, existing); err != nil {
-			logf.FromContext(ctx).Error(err, "Failed to delete drifted Route")
-			return metav1.Condition{
-					Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
-					Reason: "UpdateFailed", Message: "Failed to delete drifted Route - see operator logs for details",
-				},
-				fmt.Errorf("deleting drifted envoy route: %w", err)
-		}
+		// Not atomic - Route.spec.host/to can't be updated in-place per this
+		// codebase's established convention (see reconcileRoute), so there's
+		// an unavoidable gap between Delete and Create where no Route
+		// exists. Building the replacement object first only shaves
+		// negligible local CPU time off that gap, not the network round
+		// trips that dominate it. The real mitigation is on the recreate
+		// failure path below: if Create fails after Delete succeeded, the
+		// non-nil error this function returns already drives the caller's
+		// RequeueAfter: 30s retry, and that retry hits the "not found"
+		// branch above (fresh create), not this drift branch again - so
+		// recovery is bounded to one reconcile interval, not indefinite.
 		route := &unstructured.Unstructured{}
 		route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
 		route.SetName(routeName)
@@ -1308,11 +1311,23 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 			"port": map[string]interface{}{"targetPort": int64(10443)},
 			"tls":  map[string]interface{}{"termination": "passthrough"},
 		}
-		if err := r.Create(ctx, route); err != nil {
-			logf.FromContext(ctx).Error(err, "Failed to recreate drifted Route")
+
+		if err := r.Delete(ctx, existing); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed to delete drifted Route")
 			return metav1.Condition{
 					Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
-					Reason: "UpdateFailed", Message: "Failed to recreate drifted Route - see operator logs for details",
+					Reason: "UpdateFailed", Message: "Failed to delete drifted Route - see operator logs for details",
+				},
+				fmt.Errorf("deleting drifted envoy route: %w", err)
+		}
+		if err := r.Create(ctx, route); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed to recreate Route after deleting the drifted one - "+
+				"no Route exists until the next reconcile retries this")
+			return metav1.Condition{
+					Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+					Reason: "RecreateFailed",
+					Message: "Deleted the drifted Route but failed to recreate it - no Route exists until " +
+						"the next reconcile retries this; see operator logs for details",
 				},
 				fmt.Errorf("recreating drifted envoy route: %w", err)
 		}
