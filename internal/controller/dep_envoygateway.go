@@ -99,12 +99,18 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 		}, err
 	}
 	// The embedded components.yaml is a static manifest - it can only ever
-	// create a GatewayClass literally named staticGatewayClassName. A
+	// create/own a GatewayClass literally named staticGatewayClassName. A
 	// custom gatewayClassName only makes sense with an externally-managed
-	// GatewayClass (the branch above); auto-installing here would silently
-	// create a class nothing references, since the Gateway resource this
-	// operator creates elsewhere points at the custom name instead.
-	if !alreadyInstalled && gcName != staticGatewayClassName {
+	// GatewayClass (the "not owned by OGO" branch above, already returned);
+	// reaching this point with a different name would mean either about to
+	// auto-install a mismatched class, or (if alreadyInstalled) that a
+	// custom name was set after an "eg" install already happened - but that
+	// second case can't actually occur, since alreadyInstalled requires
+	// Get(gcName) to have succeeded, and OGO never creates anything except
+	// staticGatewayClassName. Kept as an unconditional check anyway (not
+	// gated on !alreadyInstalled) so it stays correct if that invariant
+	// ever changes.
+	if gcName != staticGatewayClassName {
 		return metav1.Condition{
 			Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
 			Reason: "InvalidConfig",
@@ -157,17 +163,19 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 	}
 
 	sccsSkipped := false
-	if isOCP && shouldGrantSCCs(gw) {
-		if err := e.grantOpenShiftSCCs(ctx, gw); err != nil {
-			log.Error(err, "Failed to grant SCCs")
-			return metav1.Condition{
-				Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
-				Reason: "SCCFailed", Message: "Failed to grant SCCs - see operator logs for details",
-			}, err
+	if isOCP {
+		if shouldGrantSCCs(gw) {
+			if err := e.grantOpenShiftSCCs(ctx, gw); err != nil {
+				log.Error(err, "Failed to grant SCCs")
+				return metav1.Condition{
+					Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
+					Reason: "SCCFailed", Message: "Failed to grant SCCs - see operator logs for details",
+				}, err
+			}
+		} else {
+			sccsSkipped = true
+			log.Info("Automatic SCC grants skipped", "reason", "grantSCCs: false")
 		}
-	} else if isOCP {
-		sccsSkipped = true
-		log.Info("Automatic SCC grants skipped", "reason", "grantSCCs: false")
 	}
 
 	log.Info("Envoy Gateway installed", "version", envoygateway.Version)

@@ -1231,6 +1231,14 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 				"(labeled gateway.envoyproxy.io/owning-gateway-name/-namespace) before the Route can be created",
 		}, nil
 	}
+	if len(svcList.Items) > 1 {
+		// The API doesn't guarantee list ordering — picking Items[0] below
+		// is only safe because this label selector should always match
+		// exactly one Service. Surface it if that assumption ever breaks
+		// (e.g. leftover state from a prior Gateway not fully cleaned up).
+		logf.FromContext(ctx).Info("Multiple Envoy proxy services matched the owning-gateway labels, using the first",
+			"count", len(svcList.Items))
+	}
 
 	envoySvc := svcList.Items[0]
 	routeName := gw.Name + "-gw"
@@ -1271,6 +1279,49 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 			},
 			fmt.Errorf("getting envoy route: %w", err)
 	}
+
+	// Keep the Route in sync with the CR's current desired state - the
+	// hostname can change between deployments, and the proxy Service name
+	// changes if Envoy Gateway ever re-provisions it under a new name.
+	// route.openshift.io Routes don't support mutating host/to via a plain
+	// Update in this codebase's established convention (see reconcileRoute)
+	// - delete and recreate instead.
+	existingHost, _, _ := unstructured.NestedString(existing.Object, "spec", "host")
+	existingToName, _, _ := unstructured.NestedString(existing.Object, "spec", "to", "name")
+	if existingHost != hostname || existingToName != envoySvc.Name {
+		if err := r.Delete(ctx, existing); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed to delete drifted Route")
+			return metav1.Condition{
+					Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+					Reason: "UpdateFailed", Message: "Failed to delete drifted Route - see operator logs for details",
+				},
+				fmt.Errorf("deleting drifted envoy route: %w", err)
+		}
+		route := &unstructured.Unstructured{}
+		route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+		route.SetName(routeName)
+		route.SetNamespace(envoySvc.Namespace)
+		route.SetLabels(gatewayLabels(gw))
+		route.Object["spec"] = map[string]interface{}{
+			"host": hostname,
+			"to":   map[string]interface{}{"kind": "Service", "name": envoySvc.Name},
+			"port": map[string]interface{}{"targetPort": int64(10443)},
+			"tls":  map[string]interface{}{"termination": "passthrough"},
+		}
+		if err := r.Create(ctx, route); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed to recreate drifted Route")
+			return metav1.Condition{
+					Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+					Reason: "UpdateFailed", Message: "Failed to recreate drifted Route - see operator logs for details",
+				},
+				fmt.Errorf("recreating drifted envoy route: %w", err)
+		}
+		return metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionTrue,
+			Reason: "Created", Message: fmt.Sprintf("Route %s recreated for host %s", routeName, hostname),
+		}, nil
+	}
+
 	return metav1.Condition{
 		Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionTrue,
 		Reason: "Exists", Message: fmt.Sprintf("Route %s exists for host %s", routeName, hostname),
