@@ -95,6 +95,9 @@ jobs:
       - name: Diagnose MINC failure
         if: failure()
         run: |
+          # All commands here are best-effort diagnostic aids - `|| true`
+          # prevents any single missing tool or command from cutting the
+          # diagnostic dump short.
           echo "=== podman info ==="
           sudo podman info || true
           echo "=== podman ps -a ==="

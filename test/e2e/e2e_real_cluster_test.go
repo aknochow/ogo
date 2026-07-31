@@ -350,6 +350,11 @@ spec:
     openshift:
       userGroup: openshell-e2e-users
   tls:
+    # Deliberate, not an oversight: mirrors the Gateway API/Envoy
+    # production shape (see the AfterAll staging CR above) - the gateway
+    # pod's own listener (tls.enabled) and the Envoy-fronted listener's
+    # cert-manager cert (certManager.enabled) are two independent
+    # termination points, verified working end-to-end on RDU/SNO.
     enabled: false
     certManager:
       enabled: true

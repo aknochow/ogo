@@ -114,7 +114,6 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 	}
 
 	isOCP := openshift.IsOpenShift(e.DiscoveryClient)
-	hasGWAPICRDs := openshift.HasGatewayAPI(e.DiscoveryClient)
 
 	// Skip re-applying manifests once we own an already-installed
 	// GatewayClass - applyManifestFile is idempotent, but there's no reason
@@ -129,7 +128,7 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 	if !alreadyInstalled {
 		log.Info("Installing Envoy Gateway", "version", envoygateway.Version)
 
-		if !hasGWAPICRDs {
+		if !openshift.HasGatewayAPI(e.DiscoveryClient) {
 			if err := e.applyManifestFile(ctx, "gatewayapi-crds.yaml", gw); err != nil {
 				log.Error(err, "Failed to install Gateway API CRDs")
 				return metav1.Condition{
@@ -335,7 +334,7 @@ func (e *EnvoyGatewayReconciler) grantOpenShiftSCCs(ctx context.Context, gw *ogo
 			// stuck at FailedCreate (SCC admission) without this fix.
 			name:      "eg-gateway-helm-certgen-anyuid",
 			sa:        "eg-gateway-helm-certgen",
-			namespace: "envoy-gateway-system",
+			namespace: envoyGatewaySystemNS,
 			scc:       "anyuid",
 		},
 		{
@@ -349,7 +348,7 @@ func (e *EnvoyGatewayReconciler) grantOpenShiftSCCs(ctx context.Context, gw *ogo
 			// pod (SCC admission rejects every default provider).
 			name:      "envoy-gateway-anyuid",
 			sa:        "envoy-gateway",
-			namespace: "envoy-gateway-system",
+			namespace: envoyGatewaySystemNS,
 			scc:       "anyuid",
 		},
 	}
