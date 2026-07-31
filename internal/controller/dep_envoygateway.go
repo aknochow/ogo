@@ -98,18 +98,12 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 			Reason: "CheckFailed", Message: "Failed to check GatewayClass - see operator logs for details",
 		}, err
 	}
-	// The embedded components.yaml is a static manifest - it can only ever
-	// create/own a GatewayClass literally named staticGatewayClassName. A
-	// custom gatewayClassName only makes sense with an externally-managed
-	// GatewayClass (the "not owned by OGO" branch above, already returned);
-	// reaching this point with a different name would mean either about to
-	// auto-install a mismatched class, or (if alreadyInstalled) that a
-	// custom name was set after an "eg" install already happened - but that
-	// second case can't actually occur, since alreadyInstalled requires
-	// Get(gcName) to have succeeded, and OGO never creates anything except
-	// staticGatewayClassName. Kept as an unconditional check anyway (not
-	// gated on !alreadyInstalled) so it stays correct if that invariant
-	// ever changes.
+	// The embedded manifest can only create/own a GatewayClass named
+	// staticGatewayClassName. A custom name requires an externally-managed
+	// GatewayClass (the "not owned by OGO" branch above, already returned) -
+	// unconditional rather than !alreadyInstalled-gated as a defensive
+	// invariant check, not because the alreadyInstalled case can diverge
+	// today.
 	if gcName != staticGatewayClassName {
 		return metav1.Condition{
 			Type: ogov1alpha1.ConditionEnvoyGatewayReady, Status: metav1.ConditionFalse,
@@ -178,7 +172,11 @@ func (e *EnvoyGatewayReconciler) Reconcile(ctx context.Context, gw *ogov1alpha1.
 		}
 	}
 
-	log.Info("Envoy Gateway installed", "version", envoygateway.Version)
+	if alreadyInstalled {
+		log.V(1).Info("Envoy Gateway already installed, verified SCCs", "version", envoygateway.Version)
+	} else {
+		log.Info("Envoy Gateway installed", "version", envoygateway.Version)
+	}
 	message := fmt.Sprintf("Envoy Gateway %s installed by OGO", envoygateway.Version)
 	if sccsSkipped {
 		// Surface this in the condition, not just the log - the pods won't
