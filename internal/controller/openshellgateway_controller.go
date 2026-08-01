@@ -204,7 +204,16 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			if condition.Type != "" {
 				meta.SetStatusCondition(&gw.Status.Conditions, condition)
 			}
-			if err != nil {
+			// A missing required field is an incomplete config waiting on
+			// the user, not a reconcile failure - the EnvoyRouteReady
+			// condition set above already surfaces exactly what is
+			// missing. Deliberately fall through to the rest of Reconcile
+			// (including updateStatus at the end) instead of returning
+			// early here: an early return would skip updateStatus
+			// entirely, leaving Phase/Degraded stuck at whatever a
+			// previous failed pass last set, even once this pass
+			// otherwise completes cleanly.
+			if err != nil && condition.Reason != "HostnameMissing" {
 				log.Error(err, "Failed to reconcile Envoy Route")
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "EnvoyRoute", err)
 			}
@@ -966,7 +975,19 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw
 	ns := gatewayNamespace(gw)
 	hostname := gw.Spec.Route.Hostname
 	if hostname == "" {
-		return fmt.Errorf("route.hostname is required when using Gateway API")
+		// An incomplete config waiting on the user, not a reconcile
+		// failure - set the same condition reconcileEnvoyRoute reports for
+		// this exact case (it runs later, but only on OpenShift; setting
+		// it here too keeps a vanilla Kubernetes cluster from getting zero
+		// visibility into why no Gateway API resources exist yet). Return
+		// nil so the caller doesn't escalate to Phase: Failed - the
+		// terminal reconcile requeue picks this up again once hostname is
+		// set, same as every other "waiting for config/dependency" state.
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+			Reason: "HostnameMissing", Message: "route.hostname is required when using Gateway API",
+		})
+		return nil
 	}
 
 	tlsSecretName := gw.Name + "-gateway-tls"
