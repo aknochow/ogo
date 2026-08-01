@@ -63,6 +63,14 @@ const (
 	managedByValue   = "ogo"
 	defaultNamespace = "ogo"
 	phaseFailed      = "Failed"
+
+	// reasonHostnameMissing is set by both reconcileGatewayAPI and
+	// reconcileEnvoyRoute (each independently checks route.hostname, since
+	// one runs regardless of isOCP and the other only on OpenShift), and
+	// checked again at the reconcileEnvoyRoute call site to avoid
+	// escalating this specific reason to Phase: Failed. A shared constant
+	// keeps those three sites from silently drifting apart.
+	reasonHostnameMissing = "HostnameMissing"
 )
 
 type OpenShellGatewayReconciler struct {
@@ -213,7 +221,7 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			// entirely, leaving Phase/Degraded stuck at whatever a
 			// previous failed pass last set, even once this pass
 			// otherwise completes cleanly.
-			if err != nil && condition.Reason != "HostnameMissing" {
+			if err != nil && condition.Reason != reasonHostnameMissing {
 				log.Error(err, "Failed to reconcile Envoy Route")
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "EnvoyRoute", err)
 			}
@@ -985,7 +993,7 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw
 		// set, same as every other "waiting for config/dependency" state.
 		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
-			Reason: "HostnameMissing", Message: "route.hostname is required when using Gateway API",
+			Reason: reasonHostnameMissing, Message: "route.hostname is required when using Gateway API",
 		})
 		return nil
 	}
@@ -1228,7 +1236,7 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 	if hostname == "" {
 		return metav1.Condition{
 			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
-			Reason: "HostnameMissing", Message: "route.hostname is required when using Gateway API",
+			Reason: reasonHostnameMissing, Message: "route.hostname is required when using Gateway API",
 		}, fmt.Errorf("route.hostname is required when using Gateway API")
 	}
 
