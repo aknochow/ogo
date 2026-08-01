@@ -209,6 +209,18 @@ type GatewayAPISpec struct {
 	// is managed externally.
 	// +kubebuilder:default=true
 	InstallEnvoyGateway *bool `json:"installEnvoyGateway,omitempty"`
+
+	// GrantSCCs automatically grants the OpenShift SecurityContextConstraints
+	// Envoy Gateway's auto-installed components need to schedule (anyuid, for
+	// their fixed non-root UIDs). Defaults to true so the auto-install path
+	// works out of the box, matching InstallEnvoyGateway's default — set to
+	// false if your cluster's security policy requires granting SCCs through
+	// a separate, audited process instead of having the operator do it as a
+	// side effect of this CR. Only takes effect when InstallEnvoyGateway
+	// performs the install; has no effect on an externally-managed
+	// GatewayClass, which OGO never touches.
+	// +kubebuilder:default=true
+	GrantSCCs *bool `json:"grantSCCs,omitempty"`
 }
 
 // AuthSpec configures gateway authentication.
@@ -292,6 +304,7 @@ const (
 	ConditionEnvoyGatewayReady  = "EnvoyGatewayReady"
 	ConditionOpenShiftGroups    = "OpenShiftGroupsReady"
 	ConditionEnvoyProxySCCReady = "EnvoyProxySCCReady"
+	ConditionEnvoyRouteReady    = "EnvoyRouteReady"
 )
 
 // Phase values for OpenShellGateway.

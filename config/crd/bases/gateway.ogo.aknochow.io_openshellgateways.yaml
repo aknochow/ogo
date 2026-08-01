@@ -269,6 +269,19 @@ spec:
                           to use.
                         maxLength: 253
                         type: string
+                      grantSCCs:
+                        default: true
+                        description: |-
+                          GrantSCCs automatically grants the OpenShift SecurityContextConstraints
+                          Envoy Gateway's auto-installed components need to schedule (anyuid, for
+                          their fixed non-root UIDs). Defaults to true so the auto-install path
+                          works out of the box, matching InstallEnvoyGateway's default — set to
+                          false if your cluster's security policy requires granting SCCs through
+                          a separate, audited process instead of having the operator do it as a
+                          side effect of this CR. Only takes effect when InstallEnvoyGateway
+                          performs the install; has no effect on an externally-managed
+                          GatewayClass, which OGO never touches.
+                        type: boolean
                       installEnvoyGateway:
                         default: true
                         description: |-

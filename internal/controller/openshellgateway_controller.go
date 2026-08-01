@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -63,6 +64,14 @@ const (
 	managedByValue   = "ogo"
 	defaultNamespace = "ogo"
 	phaseFailed      = "Failed"
+
+	// reasonHostnameMissing is set by both reconcileGatewayAPI and
+	// reconcileEnvoyRoute (each independently checks route.hostname, since
+	// one runs regardless of isOCP and the other only on OpenShift), and
+	// checked again at the reconcileEnvoyRoute call site to avoid
+	// escalating this specific reason to Phase: Failed. A shared constant
+	// keeps those three sites from silently drifting apart.
+	reasonHostnameMissing = "HostnameMissing"
 )
 
 type OpenShellGatewayReconciler struct {
@@ -200,7 +209,16 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	if isOCP {
 		if useGWAPI {
-			if err := r.reconcileEnvoyRoute(ctx, gw); err != nil {
+			condition, err := r.reconcileEnvoyRoute(ctx, gw)
+			if condition.Type != "" {
+				meta.SetStatusCondition(&gw.Status.Conditions, condition)
+			}
+			// reconcileEnvoyRoute returns nil for the reasonHostnameMissing
+			// case (an incomplete config waiting on the user, not a
+			// reconcile failure - the condition set above already surfaces
+			// exactly what is missing), so any non-nil error here is a
+			// genuine failure. No special-casing needed at this call site.
+			if err != nil {
 				log.Error(err, "Failed to reconcile Envoy Route")
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "EnvoyRoute", err)
 			}
@@ -955,14 +973,26 @@ func gatewayClassName(gw *ogov1alpha1.OpenShellGateway) string {
 	if gw.Spec.Route.GatewayAPI.GatewayClassName != "" {
 		return gw.Spec.Route.GatewayAPI.GatewayClassName
 	}
-	return "eg"
+	return staticGatewayClassName
 }
 
 func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
 	ns := gatewayNamespace(gw)
 	hostname := gw.Spec.Route.Hostname
 	if hostname == "" {
-		return fmt.Errorf("route.hostname is required when using Gateway API")
+		// An incomplete config waiting on the user, not a reconcile
+		// failure - set the same condition reconcileEnvoyRoute reports for
+		// this exact case (it runs later, but only on OpenShift; setting
+		// it here too keeps a vanilla Kubernetes cluster from getting zero
+		// visibility into why no Gateway API resources exist yet). Return
+		// nil so the caller doesn't escalate to Phase: Failed - the
+		// terminal reconcile requeue picks this up again once hostname is
+		// set, same as every other "waiting for config/dependency" state.
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+			Reason: reasonHostnameMissing, Message: "route.hostname is required when using Gateway API",
+		})
+		return nil
 	}
 
 	tlsSecretName := gw.Name + "-gateway-tls"
@@ -1184,25 +1214,68 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 	return r.Update(ctx, existing)
 }
 
-func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+// reconcileEnvoyRoute bridges the OpenShift Route that fronts the
+// Envoy-managed proxy Service. It always returns a condition (not just an
+// error) so `oc get openshellgateway -o yaml` shows *why* the route isn't
+// up when it isn't - previously several no-route cases returned bare nil,
+// which was indistinguishable from success.
+func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (metav1.Condition, error) {
 	if gw.Spec.Route.Enabled != nil && !*gw.Spec.Route.Enabled {
-		return nil
+		// Zero-value Condition (empty Type) signals "nothing to report" to
+		// the call site, which skips SetStatusCondition entirely - a
+		// disabled route isn't "not ready", it's not applicable, and
+		// shouldn't leave a stale EnvoyRouteReady=False condition visible
+		// on a CR that will never use this code path.
+		return metav1.Condition{}, nil
 	}
 
 	hostname := gw.Spec.Route.Hostname
 	if hostname == "" {
-		return nil
+		// nil error, matching reconcileGatewayAPI's handling of the same
+		// condition (this function runs right after it, on OpenShift
+		// only) - the condition alone is enough for the caller and
+		// updateStatus to act on; a non-nil error here would exist only to
+		// be inspected and discarded at the call site, which is exactly
+		// the "unnecessary complexity" that made this exact area error
+		// prone the last time it changed.
+		return metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+			Reason: reasonHostnameMissing, Message: "route.hostname is required when using Gateway API",
+		}, nil
 	}
 
 	svcList := &corev1.ServiceList{}
-	if err := r.List(ctx, svcList, client.MatchingLabels{
+	if err := r.List(ctx, svcList, client.InNamespace(envoyGatewaySystemNS), client.MatchingLabels{
 		"gateway.envoyproxy.io/owning-gateway-name":      gw.Name,
 		"gateway.envoyproxy.io/owning-gateway-namespace": gatewayNamespace(gw),
 	}); err != nil {
-		return fmt.Errorf("listing Envoy proxy services: %w", err)
+		logf.FromContext(ctx).Error(err, "Failed to list Envoy proxy services")
+		return metav1.Condition{
+				Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+				Reason: "ListFailed", Message: "Failed to list Envoy proxy services - see operator logs for details",
+			},
+			fmt.Errorf("listing Envoy proxy services: %w", err)
 	}
 	if len(svcList.Items) == 0 {
-		return nil
+		return metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+			Reason: "ProxyServiceNotFound",
+			Message: "Waiting for Envoy Gateway to provision the proxy Service " +
+				"(labeled gateway.envoyproxy.io/owning-gateway-name/-namespace) before the Route can be created",
+		}, nil
+	}
+	if len(svcList.Items) > 1 {
+		// The API doesn't guarantee list ordering, so sort by name first
+		// for a stable pick across reconcile passes - this label selector
+		// should always match exactly one Service in practice, so this is
+		// about determinism, not correctness. Surface it if that
+		// assumption ever breaks (e.g. leftover state from a prior Gateway
+		// not fully cleaned up).
+		sort.Slice(svcList.Items, func(i, j int) bool {
+			return svcList.Items[i].Name < svcList.Items[j].Name
+		})
+		logf.FromContext(ctx).Info("Multiple Envoy proxy services matched the owning-gateway labels, using the first by name",
+			"count", len(svcList.Items))
 	}
 
 	envoySvc := svcList.Items[0]
@@ -1223,9 +1296,89 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 			"port": map[string]interface{}{"targetPort": int64(10443)},
 			"tls":  map[string]interface{}{"termination": "passthrough"},
 		}
-		return r.Create(ctx, route)
+		if err := r.Create(ctx, route); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed to create Route")
+			return metav1.Condition{
+					Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+					Reason: "CreateFailed", Message: "Failed to create Route - see operator logs for details",
+				},
+				fmt.Errorf("creating envoy route: %w", err)
+		}
+		return metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionTrue,
+			Reason: "Created", Message: fmt.Sprintf("Route %s created for host %s", routeName, hostname),
+		}, nil
 	}
-	return err
+	if err != nil {
+		logf.FromContext(ctx).Error(err, "Failed to get existing Route")
+		return metav1.Condition{
+				Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+				Reason: "GetFailed", Message: "Failed to get existing Route - see operator logs for details",
+			},
+			fmt.Errorf("getting envoy route: %w", err)
+	}
+
+	// Keep the Route in sync with the CR's current desired state - the
+	// hostname can change between deployments, and the proxy Service name
+	// changes if Envoy Gateway ever re-provisions it under a new name.
+	// route.openshift.io Routes don't support mutating host/to via a plain
+	// Update in this codebase's established convention (see reconcileRoute)
+	// - delete and recreate instead.
+	existingHost, _, _ := unstructured.NestedString(existing.Object, "spec", "host")
+	existingToName, _, _ := unstructured.NestedString(existing.Object, "spec", "to", "name")
+	if existingHost != hostname || existingToName != envoySvc.Name {
+		// Not atomic - Route.spec.host/to can't be updated in-place per this
+		// codebase's established convention (see reconcileRoute), so there's
+		// an unavoidable gap between Delete and Create where no Route
+		// exists. Building the replacement object first only shaves
+		// negligible local CPU time off that gap, not the network round
+		// trips that dominate it. The real mitigation is on the recreate
+		// failure path below: if Create fails after Delete succeeded, the
+		// non-nil error this function returns already drives the caller's
+		// RequeueAfter: 30s retry, and that retry hits the "not found"
+		// branch above (fresh create), not this drift branch again - so
+		// recovery is bounded to one reconcile interval, not indefinite.
+		route := &unstructured.Unstructured{}
+		route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+		route.SetName(routeName)
+		route.SetNamespace(envoySvc.Namespace)
+		route.SetLabels(gatewayLabels(gw))
+		route.Object["spec"] = map[string]interface{}{
+			"host": hostname,
+			"to":   map[string]interface{}{"kind": "Service", "name": envoySvc.Name},
+			"port": map[string]interface{}{"targetPort": int64(10443)},
+			"tls":  map[string]interface{}{"termination": "passthrough"},
+		}
+
+		if err := r.Delete(ctx, existing); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed to delete drifted Route")
+			return metav1.Condition{
+					Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+					Reason: "UpdateFailed", Message: "Failed to delete drifted Route - see operator logs for details",
+				},
+				fmt.Errorf("deleting drifted envoy route: %w", err)
+		}
+		if err := r.Create(ctx, route); err != nil {
+			logf.FromContext(ctx).Error(err, "Failed to recreate Route after deleting the drifted one - "+
+				"no Route exists until the next reconcile retries this")
+			return metav1.Condition{
+					Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+					Reason: "RecreateFailed",
+					Message: "Deleted the drifted Route but failed to recreate it - no Route exists until " +
+						"the next reconcile retries this; see operator logs for details",
+				},
+				fmt.Errorf("recreating drifted envoy route: %w", err)
+		}
+		return metav1.Condition{
+			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionTrue,
+			Reason: "Created", Message: fmt.Sprintf("Route %s recreated for host %s", routeName, hostname),
+		}, nil
+	}
+
+	return metav1.Condition{
+		Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionTrue,
+		Reason: "Exists", Message: fmt.Sprintf("Route %s exists for host %s", routeName, hostname),
+	}, nil
 }
 
 // --- SCC Binding ---
@@ -1266,7 +1419,23 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 	if deploy.Spec.Replicas != nil {
 		desiredReplicas = *deploy.Spec.Replicas
 	}
-	if deploy.Status.ReadyReplicas > 0 && deploy.Status.ReadyReplicas == desiredReplicas {
+	podsReady := deploy.Status.ReadyReplicas > 0 && deploy.Status.ReadyReplicas == desiredReplicas
+
+	// A Gateway API deployment isn't actually reachable until the Envoy
+	// Route bridges it, even once the gateway pod itself is Ready — without
+	// this check, Available/Phase reported "Running" purely from pod
+	// readiness while EnvoyRouteReady was still False (e.g.
+	// ProxyServiceNotFound), a silent partial-success this PR otherwise
+	// exists to eliminate. EnvoyRouteReady is only ever set when the
+	// Gateway API path is active, so its absence here means that path
+	// isn't in use and shouldn't block Available.
+	envoyRouteBlocking := false
+	if c := meta.FindStatusCondition(gw.Status.Conditions, ogov1alpha1.ConditionEnvoyRouteReady); c != nil && c.Status != metav1.ConditionTrue {
+		envoyRouteBlocking = true
+	}
+
+	switch {
+	case podsReady && !envoyRouteBlocking:
 		latest.Status.Phase = ogov1alpha1.PhaseRunning
 		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
 			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionTrue,
@@ -1276,7 +1445,17 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 			Type: ogov1alpha1.ConditionProgressing, Status: metav1.ConditionFalse,
 			Reason: "Complete", Message: "Rollout complete",
 		})
-	} else {
+	case podsReady && envoyRouteBlocking:
+		latest.Status.Phase = ogov1alpha1.PhaseCreating
+		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionFalse,
+			Reason: "EnvoyRouteNotReady", Message: "Waiting for the Envoy Gateway Route to become ready",
+		})
+		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionProgressing, Status: metav1.ConditionTrue,
+			Reason: "Deploying", Message: "Waiting for the Envoy Gateway Route",
+		})
+	default:
 		latest.Status.Phase = ogov1alpha1.PhaseCreating
 		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
 			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionFalse,
@@ -1298,6 +1477,7 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		ogov1alpha1.ConditionDatabaseReady,
 		ogov1alpha1.ConditionEnvoyProxySCCReady,
 		ogov1alpha1.ConditionOpenShiftGroups,
+		ogov1alpha1.ConditionEnvoyRouteReady,
 	} {
 		if c := meta.FindStatusCondition(gw.Status.Conditions, condType); c != nil {
 			meta.SetStatusCondition(&latest.Status.Conditions, *c)

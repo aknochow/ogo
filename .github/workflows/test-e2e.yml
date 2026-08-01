@@ -37,6 +37,32 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Upgrade crun
+        # Root cause of the intermittent "error creating cluster" err="exit
+        # status 125" failures: Podman >=5.x emits OCI runtime-spec v1.2.1,
+        # but crun <1.14.3 has a version-parsing bug that rejects it with
+        # "crun: unknown version specified" (only surfaced once minc's debug
+        # logging was enabled below — minc itself swallows the real error).
+        # Affects Ubuntu 24.04 runner images that haven't picked up a fixed
+        # crun package yet; overwrite the system binary directly rather than
+        # relying on PATH order, since podman may reference it by absolute
+        # path.
+        env:
+          CRUN_VERSION: "1.28"
+          # Computed locally via: curl -sL <release-url> | sha256sum
+          # (crun doesn't publish a plain sha256sums file, only per-asset
+          # GPG .asc signatures) — re-verify against the .asc signature at
+          # https://github.com/containers/crun/releases/tag/1.28 before
+          # bumping this value.
+          CRUN_SHA256: 2aa6b7024a9c9f153895c0d11ae233d3758f54844011c3a039e3e89048d01d42
+        run: |
+          curl -LsSf -o /tmp/crun \
+            "https://github.com/containers/crun/releases/download/${CRUN_VERSION}/crun-${CRUN_VERSION}-linux-amd64"
+          echo "${CRUN_SHA256}  /tmp/crun" | sha256sum -c -
+          chmod +x /tmp/crun
+          sudo cp /tmp/crun "$(command -v crun)"
+          crun --version
+
       - name: Build operator image
         run: docker build -f Containerfile -t ${{ env.IMG }} .
 
@@ -54,9 +80,38 @@ jobs:
 
       - name: Create MINC cluster
         run: |
+          # Best-effort: this step runs under `bash -e`, so `|| true` is
+          # required here, not just tolerated — without it, a future minc
+          # version dropping/renaming this subcommand would abort the whole
+          # step before `minc create` is even attempted, failing CI in a new
+          # way every time this purely-diagnostic aid breaks.
+          sudo minc config set log-level debug || true
+          # This is the actual required step - if minc itself is missing or
+          # broken, this fails loudly and clearly, unlike the line above.
           sudo minc create
           echo "Waiting for cluster to be ready..."
           sudo minc status
+
+      - name: Diagnose MINC failure
+        if: failure()
+        run: |
+          # All commands here are best-effort diagnostic aids - `|| true`
+          # prevents any single missing tool or command from cutting the
+          # diagnostic dump short.
+          echo "=== podman info ==="
+          sudo podman info || true
+          echo "=== podman ps -a ==="
+          sudo podman ps -a || true
+          echo "=== podman version ==="
+          sudo podman version || true
+          echo "=== kernel/cgroup ==="
+          uname -a
+          cat /sys/fs/cgroup/cgroup.controllers 2>&1 || echo "no unified cgroup.controllers file"
+          mount | grep cgroup
+          echo "=== journalctl tail ==="
+          sudo journalctl -xe --no-pager | tail -200 || true
+          echo "=== dmesg tail ==="
+          sudo dmesg | tail -100 || true
 
       - name: Setup kubeconfig
         run: |

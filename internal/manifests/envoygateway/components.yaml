@@ -431,6 +431,12 @@ spec:
           requests:
             cpu: 100m
             memory: 256Mi
+        # seccompProfile deliberately omitted, matching the certgen
+        # container below - the anyuid SCC provider that grants this fixed
+        # UID (65532, outside the namespace's allocated range) rejects the
+        # legacy seccomp annotation OpenShift auto-derives from this field.
+        # Confirmed live on SNO: with it set, the Deployment never schedules
+        # a single pod even after the anyuid ClusterRoleBinding is granted.
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -440,8 +446,6 @@ spec:
           runAsGroup: 65532
           runAsNonRoot: true
           runAsUser: 65532
-          seccompProfile:
-            type: RuntimeDefault
         volumeMounts:
         - mountPath: /config
           name: envoy-gateway-config
@@ -561,6 +565,16 @@ spec:
         image: envoyproxy/gateway:v1.3.2
         imagePullPolicy: IfNotPresent
         name: envoy-gateway-certgen
+        # runAsUser/runAsGroup/seccompProfile deliberately omitted here
+        # (present in upstream's chart, stripped for this embedded copy) -
+        # matches the --set-json certgen.job.securityContext.{runAsUser,
+        # runAsGroup,seccompProfile}=null overrides the manual "bring your
+        # own Envoy Gateway" docs already required on OpenShift. Confirmed
+        # live on SNO: with them set, anyuid SCC admission rejects the pod
+        # (fixed UID 65534 outside the namespace's allocated range, and a
+        # seccomp annotation OpenShift auto-derives from the modern field
+        # that anyuid's provider doesn't allow) - the certgen Job's pod
+        # never got created at all, every attempt hit FailedCreate.
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -568,12 +582,45 @@ spec:
             - ALL
           privileged: false
           readOnlyRootFilesystem: true
-          runAsGroup: 65534
           runAsNonRoot: true
-          runAsUser: 65534
-          seccompProfile:
-            type: RuntimeDefault
       imagePullSecrets: []
       restartPolicy: Never
       serviceAccountName: eg-gateway-helm-certgen
   ttlSecondsAfterFinished: 30
+---
+# OGO addition (not from upstream envoyproxy/gateway-helm): default the
+# managed Envoy proxy Service to ClusterIP instead of LoadBalancer.
+# LoadBalancer is the generic Kubernetes-idiomatic default, but on
+# OpenShift the idiomatic ingress path is a Route, and requesting a
+# LoadBalancer Service outright fails on managed clusters (ROSA/OSD) that
+# cap services.loadbalancers at 0 via ResourceQuota - confirmed live
+# 2026-07-29. reconcileEnvoyRoute (openshellgateway_controller.go) bridges
+# this ClusterIP Service to an OpenShift Route regardless of Service type.
+apiVersion: gateway.envoyproxy.io/v1alpha1
+kind: EnvoyProxy
+metadata:
+  name: openshift-clusterip
+  namespace: envoy-gateway-system
+spec:
+  provider:
+    type: Kubernetes
+    kubernetes:
+      envoyService:
+        type: ClusterIP
+---
+# GatewayClass name "eg" matches gatewayClassName()'s Go-side default
+# (openshellgateway_controller.go) - a custom
+# route.gatewayAPI.gatewayClassName only works with an externally-managed
+# GatewayClass (the "External" reconcile path), not this auto-install path,
+# since this manifest is static and can't be templated per-CR.
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: eg
+spec:
+  controllerName: gateway.envoyproxy.io/gatewayclass-controller
+  parametersRef:
+    group: gateway.envoyproxy.io
+    kind: EnvoyProxy
+    name: openshift-clusterip
+    namespace: envoy-gateway-system

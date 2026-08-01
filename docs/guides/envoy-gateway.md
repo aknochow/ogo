@@ -26,34 +26,22 @@ Client ──HTTPS──▶ OpenShift Router ──passthrough──▶ Envoy Pr
 
 ## Prerequisites
 
-- [Envoy Gateway](https://gateway.envoyproxy.io/) installed on the cluster
-- A `GatewayClass` named `eg` (Envoy Gateway's default)
 - cert-manager with a `ClusterIssuer` named `letsencrypt`
 - DNS resolving the route hostname to the cluster
 
-### Install Envoy Gateway on OpenShift
+Envoy Gateway itself is **not** a prerequisite — OGO installs and configures
+it automatically (CRDs, controller, a `GatewayClass` named `eg`, and the
+SCCs it needs) when a CR sets `route.gatewayAPI.enabled: true` and no
+`GatewayClass` already exists. See [Quickstart](quickstart.md#with-envoy-gateway).
 
-The certgen pre-install hook runs as uid 65534, which is outside OpenShift's
-allowed UID range. Pre-create the namespace and service account, grant SCC,
-then install with the UID overridden so OpenShift assigns one from the
-namespace range instead.
+### Bring your own Envoy Gateway instead
 
-```bash
-# 1. Pre-create namespace and certgen service account
-oc create namespace envoy-gateway-system
-oc create sa eg-gateway-helm-certgen -n envoy-gateway-system
-oc adm policy add-scc-to-user anyuid -z eg-gateway-helm-certgen -n envoy-gateway-system
-
-# 2. Install — override certgen UID so OpenShift assigns from the namespace range
-helm install eg oci://docker.io/envoyproxy/gateway-helm \
-  --version v1.3.2 -n envoy-gateway-system --skip-crds \
-  --set-json 'certgen.job.securityContext.runAsUser=null' \
-  --set-json 'certgen.job.securityContext.runAsGroup=null' \
-  --set-json 'certgen.job.securityContext.seccompProfile=null'
-
-# 3. Grant privileged SCC to the main controller service account
-oc adm policy add-scc-to-user privileged -z envoy-gateway -n envoy-gateway-system
-```
+If you already run Envoy Gateway on this cluster for other workloads,
+install it yourself and create its `GatewayClass` before creating the OGO
+CR — OGO detects an existing `GatewayClass` and won't install its own. See
+[Quickstart's Advanced section](quickstart.md#advanced-bring-your-own-envoy-gateway)
+for the full manual install (including the `--skip-crds` scoping and
+`EnvoyProxy` ClusterIP configuration needed on OpenShift).
 
 ## Configuration
 
@@ -82,14 +70,56 @@ The operator will create:
 | `GRPCRoute/openshell` | ogo | Routes to the gateway Service |
 | `Certificate/openshell-gateway-tls` | ogo | Let's Encrypt cert |
 | `Route/openshell-gw` | envoy-gateway-system | Passthrough to Envoy proxy |
+| `GatewayClass/eg` | (cluster-scoped) | Only if none exists yet (auto-install) |
+| `EnvoyProxy/openshift-clusterip` | envoy-gateway-system | Only if auto-installed - configures the proxy Service as `ClusterIP` |
+
+### Opting out of automatic SCC grants
+
+The auto-install path also grants the `anyuid` SCC to the two ServiceAccounts
+Envoy Gateway's own pods run as (their fixed non-root UIDs fall outside the
+namespace's allocated range) — this happens automatically by default. If
+your cluster's security policy requires granting SCCs through a separate,
+audited process instead of having the operator do it as a side effect of
+creating this CR, set:
+
+```yaml
+spec:
+  route:
+    gatewayAPI:
+      grantSCCs: false
+```
+
+With this set, the auto-installed `envoy-gateway` Deployment and
+`eg-gateway-helm-certgen` Job's pods won't schedule until you grant the
+same SCCs yourself:
+
+```bash
+oc adm policy add-scc-to-user anyuid -z envoy-gateway -n envoy-gateway-system
+oc adm policy add-scc-to-user anyuid -z eg-gateway-helm-certgen -n envoy-gateway-system
+```
+
+This only affects the auto-install path — it has no effect when
+`GatewayClass eg` already exists and OGO takes the External branch instead.
 
 ## Troubleshooting
 
 ### Gateway shows `Programmed: False`
 
-This is normal on bare-metal / SNO clusters. The Envoy Service is `LoadBalancer`
-type but there's no cloud LB provider to assign an IP. Traffic flows through
-the OpenShift Route instead.
+With the default auto-install (`ClusterIP` Envoy Service), this shouldn't
+happen — there's no cloud LB address to wait for, and traffic flows through
+the OpenShift Route regardless. If you see it anyway, check the Envoy
+Gateway controller logs (`oc logs -n envoy-gateway-system
+deployment/envoy-gateway`) for the actual reason the proxy Service/
+Deployment failed to provision — don't assume it's benign.
+
+If you're on the [manual "bring your own Envoy Gateway"](#bring-your-own-envoy-gateway-instead)
+path *without* the `EnvoyProxy` ClusterIP configuration, this is expected on
+bare-metal/SNO clusters: the Envoy Service defaults to `LoadBalancer` type
+with no cloud LB provider to assign an address. Traffic still flows through
+the OpenShift Route in that case. On managed clusters (ROSA/OSD) with a
+LoadBalancer quota, the same default can instead fail outright rather than
+just sitting unprogrammed — see the `EnvoyProxy` ClusterIP config in the
+Advanced quickstart section to avoid depending on a cloud LB entirely.
 
 ### `filter_chain_not_found` in Envoy logs
 

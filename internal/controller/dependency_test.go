@@ -25,6 +25,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
@@ -197,6 +199,170 @@ var _ = Describe("EnvoyGatewayReconciler Enabled", func() {
 		}
 		gw := &ogov1alpha1.OpenShellGateway{}
 		Expect(r.Enabled(ctx, gw)).To(BeFalse())
+	})
+})
+
+var _ = Describe("EnvoyGatewayReconciler Reconcile/Cleanup", func() {
+	ctx := context.Background()
+
+	gw := func() *ogov1alpha1.OpenShellGateway {
+		return &ogov1alpha1.OpenShellGateway{
+			ObjectMeta: metav1.ObjectMeta{Name: "envoy-test-gw"},
+			Spec: ogov1alpha1.OpenShellGatewaySpec{
+				Route: ogov1alpha1.RouteSpec{
+					GatewayAPI: ogov1alpha1.GatewayAPISpec{Enabled: ptr.To(true)},
+				},
+			},
+		}
+	}
+
+	AfterEach(func() {
+		_ = k8sClient.Delete(ctx, &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "gateway.networking.k8s.io/v1",
+			"kind":       "GatewayClass",
+			"metadata":   map[string]interface{}{"name": "eg"},
+		}})
+		_ = k8sClient.Delete(ctx, &unstructured.Unstructured{Object: map[string]interface{}{
+			"apiVersion": "gateway.envoyproxy.io/v1alpha1",
+			"kind":       "EnvoyProxy",
+			"metadata":   map[string]interface{}{"name": "openshift-clusterip", "namespace": "envoy-gateway-system"},
+		}})
+	})
+
+	It("installs a ClusterIP EnvoyProxy and GatewayClass, keeps reporting Installed (not External) on later self-owned passes, and never deletes them on Cleanup", func() {
+		r := &EnvoyGatewayReconciler{
+			Client:          k8sClient,
+			DiscoveryClient: fake.NewSimpleClientset().Discovery(),
+		}
+
+		// First pass installs the Gateway API + Envoy Gateway CRDs and this
+		// package's GatewayClass/EnvoyProxy instances in the same call -
+		// CRD establishment isn't instant, so retry until it succeeds,
+		// mirroring how the real reconcile loop's RequeueAfter naturally
+		// self-heals this on a later pass.
+		Eventually(func(g Gomega) {
+			condition, err := r.Reconcile(ctx, gw())
+			g.Expect(err).NotTo(HaveOccurred())
+			g.Expect(condition.Reason).To(Equal("Installed"))
+		}, "30s", "500ms").Should(Succeed())
+
+		envoyProxy := &unstructured.Unstructured{}
+		envoyProxy.SetGroupVersionKind(schema.GroupVersionKind{Group: "gateway.envoyproxy.io", Version: "v1alpha1", Kind: "EnvoyProxy"})
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "openshift-clusterip", Namespace: "envoy-gateway-system"}, envoyProxy)).To(Succeed())
+		serviceType, _, _ := unstructured.NestedString(envoyProxy.Object, "spec", "provider", "kubernetes", "envoyService", "type")
+		Expect(serviceType).To(Equal("ClusterIP"))
+		Expect(envoyProxy.GetLabels()[labelProvisionedBy]).To(Equal(provisionedByOGO))
+		Expect(envoyProxy.GetLabels()[labelManagedBy]).To(Equal(managedByValue))
+
+		gatewayClass := &unstructured.Unstructured{}
+		gatewayClass.SetGroupVersionKind(gatewayClassGVK)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, gatewayClass)).To(Succeed())
+		paramsName, _, _ := unstructured.NestedString(gatewayClass.Object, "spec", "parametersRef", "name")
+		Expect(paramsName).To(Equal("openshift-clusterip"))
+
+		// Second pass: the GatewayClass now exists AND is OGO-owned, so
+		// Reconcile skips re-applying manifests but still reports
+		// "Installed" (not "External" - that's reserved for a genuinely
+		// external, non-OGO-owned GatewayClass) and still retries the SCC
+		// grants. This matters: if the SCC grant transiently failed on the
+		// very first pass (after the GatewayClass was already created),
+		// every later pass used to see the GatewayClass already exists and
+		// report "External" forever, permanently masking a grant that never
+		// actually succeeded.
+		condition, err := r.Reconcile(ctx, gw())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(condition.Reason).To(Equal("Installed"))
+
+		// Cleanup is diagnostic-only - it must never delete the
+		// self-installed GatewayClass.
+		Expect(r.Cleanup(ctx, gw())).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, gatewayClass)).To(Succeed())
+	})
+
+	It("Reconcile reports External immediately for a GatewayClass OGO doesn't own", func() {
+		r := &EnvoyGatewayReconciler{
+			Client:          k8sClient,
+			DiscoveryClient: fake.NewSimpleClientset().Discovery(),
+		}
+		externalGC := &unstructured.Unstructured{}
+		externalGC.SetGroupVersionKind(gatewayClassGVK)
+		externalGC.SetName("eg")
+		externalGC.Object["spec"] = map[string]interface{}{
+			"controllerName": "gateway.envoyproxy.io/gatewayclass-controller",
+		}
+		Expect(k8sClient.Create(ctx, externalGC)).To(Succeed())
+
+		condition, err := r.Reconcile(ctx, gw())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(condition.Reason).To(Equal("External"))
+	})
+
+	It("Cleanup is a no-op for a GatewayClass OGO never created", func() {
+		r := &EnvoyGatewayReconciler{
+			Client:          k8sClient,
+			DiscoveryClient: fake.NewSimpleClientset().Discovery(),
+		}
+		externalGC := &unstructured.Unstructured{}
+		externalGC.SetGroupVersionKind(gatewayClassGVK)
+		externalGC.SetName("eg")
+		externalGC.Object["spec"] = map[string]interface{}{
+			"controllerName": "gateway.envoyproxy.io/gatewayclass-controller",
+		}
+		Expect(k8sClient.Create(ctx, externalGC)).To(Succeed())
+
+		Expect(r.Cleanup(ctx, gw())).To(Succeed())
+
+		stillThere := &unstructured.Unstructured{}
+		stillThere.SetGroupVersionKind(gatewayClassGVK)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, stillThere)).To(Succeed())
+	})
+
+	It("rejects a custom gatewayClassName on the auto-install path instead of silently installing a mismatched 'eg' GatewayClass", func() {
+		r := &EnvoyGatewayReconciler{
+			Client:          k8sClient,
+			DiscoveryClient: fake.NewSimpleClientset().Discovery(),
+		}
+		customNameGW := gw()
+		customNameGW.Spec.Route.GatewayAPI.GatewayClassName = "my-custom-class"
+
+		condition, err := r.Reconcile(ctx, customNameGW)
+		Expect(err).To(HaveOccurred())
+		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(condition.Reason).To(Equal("InvalidConfig"))
+
+		// Confirm it didn't fall back to installing the hardcoded "eg" name.
+		installedAnyway := &unstructured.Unstructured{}
+		installedAnyway.SetGroupVersionKind(gatewayClassGVK)
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "eg"}, installedAnyway)).NotTo(Succeed())
+	})
+})
+
+var _ = Describe("shouldGrantSCCs", func() {
+	It("defaults to true when unset", func() {
+		g := &ogov1alpha1.OpenShellGateway{}
+		Expect(shouldGrantSCCs(g)).To(BeTrue())
+	})
+
+	It("is true when explicitly enabled", func() {
+		g := &ogov1alpha1.OpenShellGateway{
+			Spec: ogov1alpha1.OpenShellGatewaySpec{
+				Route: ogov1alpha1.RouteSpec{
+					GatewayAPI: ogov1alpha1.GatewayAPISpec{GrantSCCs: ptr.To(true)},
+				},
+			},
+		}
+		Expect(shouldGrantSCCs(g)).To(BeTrue())
+	})
+
+	It("is false when explicitly disabled", func() {
+		g := &ogov1alpha1.OpenShellGateway{
+			Spec: ogov1alpha1.OpenShellGatewaySpec{
+				Route: ogov1alpha1.RouteSpec{
+					GatewayAPI: ogov1alpha1.GatewayAPISpec{GrantSCCs: ptr.To(false)},
+				},
+			},
+		}
+		Expect(shouldGrantSCCs(g)).To(BeFalse())
 	})
 })
 

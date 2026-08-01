@@ -59,6 +59,8 @@ tags: [crd, gateway]
 | `hostname` | string | | Custom hostname for the Route |
 | `gatewayAPI.enabled` | bool | (auto) | Create Gateway + GRPCRoute. Auto-detected when Gateway API CRDs are installed. |
 | `gatewayAPI.gatewayClassName` | string | `eg` | GatewayClass name |
+| `gatewayAPI.installEnvoyGateway` | bool | `true` | Auto-install Envoy Gateway when no matching GatewayClass exists. Set `false` if it's managed externally. |
+| `gatewayAPI.grantSCCs` | bool | `true` | Auto-grant the OpenShift SCCs (`anyuid`) the auto-installed Envoy Gateway pods need to schedule. Set `false` to grant them through a separate, audited process instead — see [Envoy Gateway](../guides/envoy-gateway.md#opting-out-of-automatic-scc-grants). Only applies when `installEnvoyGateway` performs the install. |
 
 ### `spec.auth`
 
