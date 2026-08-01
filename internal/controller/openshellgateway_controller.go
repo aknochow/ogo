@@ -22,6 +22,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -212,16 +213,12 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			if condition.Type != "" {
 				meta.SetStatusCondition(&gw.Status.Conditions, condition)
 			}
-			// A missing required field is an incomplete config waiting on
-			// the user, not a reconcile failure - the EnvoyRouteReady
-			// condition set above already surfaces exactly what is
-			// missing. Deliberately fall through to the rest of Reconcile
-			// (including updateStatus at the end) instead of returning
-			// early here: an early return would skip updateStatus
-			// entirely, leaving Phase/Degraded stuck at whatever a
-			// previous failed pass last set, even once this pass
-			// otherwise completes cleanly.
-			if err != nil && condition.Reason != reasonHostnameMissing {
+			// reconcileEnvoyRoute returns nil for the reasonHostnameMissing
+			// case (an incomplete config waiting on the user, not a
+			// reconcile failure - the condition set above already surfaces
+			// exactly what is missing), so any non-nil error here is a
+			// genuine failure. No special-casing needed at this call site.
+			if err != nil {
 				log.Error(err, "Failed to reconcile Envoy Route")
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "EnvoyRoute", err)
 			}
@@ -1234,10 +1231,17 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 
 	hostname := gw.Spec.Route.Hostname
 	if hostname == "" {
+		// nil error, matching reconcileGatewayAPI's handling of the same
+		// condition (this function runs right after it, on OpenShift
+		// only) - the condition alone is enough for the caller and
+		// updateStatus to act on; a non-nil error here would exist only to
+		// be inspected and discarded at the call site, which is exactly
+		// the "unnecessary complexity" that made this exact area error
+		// prone the last time it changed.
 		return metav1.Condition{
 			Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
 			Reason: reasonHostnameMissing, Message: "route.hostname is required when using Gateway API",
-		}, fmt.Errorf("route.hostname is required when using Gateway API")
+		}, nil
 	}
 
 	svcList := &corev1.ServiceList{}
@@ -1261,11 +1265,16 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 		}, nil
 	}
 	if len(svcList.Items) > 1 {
-		// The API doesn't guarantee list ordering — picking Items[0] below
-		// is only safe because this label selector should always match
-		// exactly one Service. Surface it if that assumption ever breaks
-		// (e.g. leftover state from a prior Gateway not fully cleaned up).
-		logf.FromContext(ctx).Info("Multiple Envoy proxy services matched the owning-gateway labels, using the first",
+		// The API doesn't guarantee list ordering, so sort by name first
+		// for a stable pick across reconcile passes - this label selector
+		// should always match exactly one Service in practice, so this is
+		// about determinism, not correctness. Surface it if that
+		// assumption ever breaks (e.g. leftover state from a prior Gateway
+		// not fully cleaned up).
+		sort.Slice(svcList.Items, func(i, j int) bool {
+			return svcList.Items[i].Name < svcList.Items[j].Name
+		})
+		logf.FromContext(ctx).Info("Multiple Envoy proxy services matched the owning-gateway labels, using the first by name",
 			"count", len(svcList.Items))
 	}
 
