@@ -180,6 +180,11 @@ func (p *PostgreSQLReconciler) ensureDeployment(ctx context.Context, gw *ogov1al
 			"ogo.aknochow.io/warning":  "Not for production use",
 		}
 		deploy.Spec.Replicas = ptr.To(int32(1))
+		// Recreate, not the default RollingUpdate: the single replica mounts
+		// one ReadWriteOnce PVC, so a replacement pod scheduled on another
+		// node can't attach the volume while the old pod (and its node
+		// attachment) is still around. Recreate tears down first.
+		deploy.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
 		deploy.Spec.Selector = &metav1.LabelSelector{MatchLabels: map[string]string{"app": gw.Name + "-pg"}}
 		deploy.Spec.Template = corev1.PodTemplateSpec{
 			ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": gw.Name + "-pg"}},

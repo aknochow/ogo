@@ -901,11 +901,21 @@ func (r *OpenShellGatewayReconciler) reconcileNetworkPolicy(ctx context.Context,
 // --- OpenShift Route ---
 
 func (r *OpenShellGatewayReconciler) reconcileRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	ns := gatewayNamespace(gw)
+
 	if gw.Spec.Route.Enabled != nil && !*gw.Spec.Route.Enabled {
-		return nil
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
+		err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, existing)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return r.Delete(ctx, existing)
 	}
 
-	ns := gatewayNamespace(gw)
 	tlsEnabled := gw.Spec.TLS.Enabled == nil || *gw.Spec.TLS.Enabled
 	tlsTermination := "passthrough"
 	if !tlsEnabled {
@@ -1664,6 +1674,17 @@ func (r *OpenShellGatewayReconciler) reconcileAuthBridgeRoute(ctx context.Contex
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
 	err := r.Get(ctx, types.NamespacedName{Name: routeName, Namespace: ns}, existing)
+
+	if gw.Spec.Route.Enabled != nil && !*gw.Spec.Route.Enabled {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return r.Delete(ctx, existing)
+	}
+
 	if apierrors.IsNotFound(err) {
 		hostname := ""
 		if gw.Spec.Route.Hostname != "" {
