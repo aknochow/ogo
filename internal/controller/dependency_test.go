@@ -99,6 +99,7 @@ var _ = Describe("PostgreSQLReconciler", func() {
 		deploy := &appsv1.Deployment{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "test-gw-pg", Namespace: ns}, deploy)).To(Succeed())
 		Expect(deploy.Labels[labelProvisionedBy]).To(Equal(provisionedByOGO))
+		Expect(deploy.Spec.Strategy.Type).To(Equal(appsv1.RecreateDeploymentStrategyType))
 
 		svc := &corev1.Service{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "test-gw-pg", Namespace: ns}, svc)).To(Succeed())
