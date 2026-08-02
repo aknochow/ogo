@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net/http"
@@ -58,30 +59,76 @@ func main() {
 	fmt.Printf("auth-bridge starting\n  issuer: %s\n  openshift: %s\n  listen: %s\n",
 		config.Issuer, config.OpenShiftOAuth, config.ListenAddr)
 
-	srv := &http.Server{
-		Addr:         config.ListenAddr,
-		Handler:      server.Handler(),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
-		IdleTimeout:  120 * time.Second,
+	handler := server.Handler()
+	servers := []*http.Server{newHTTPServer(config.ListenAddr, handler)}
+	tlsCert := os.Getenv("AUTH_BRIDGE_TLS_CERT")
+	tlsKey := os.Getenv("AUTH_BRIDGE_TLS_KEY")
+	if err := validateTLSFiles(tlsCert, tlsKey); err != nil {
+		log.Fatal(err)
+	}
+	if tlsCert != "" {
+		servers = append(servers, newHTTPServer(envOrDefault("AUTH_BRIDGE_TLS_LISTEN", ":8443"), handler))
 	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
-	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed: %v", err)
+	for i, srv := range servers {
+		cert, key := "", ""
+		if i > 0 {
+			cert, key = tlsCert, tlsKey
 		}
-	}()
+		go func() {
+			if err := listenAndServe(srv, cert, key); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("Server failed: %v", err)
+			}
+		}()
+	}
 
 	<-stop
 	log.Println("Shutting down...")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(ctx); err != nil {
-		log.Printf("Shutdown error: %v", err)
+	for _, srv := range servers {
+		if err := srv.Shutdown(ctx); err != nil {
+			log.Printf("Shutdown error: %v", err)
+		}
 	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:         addr,
+		Handler:      handler,
+		ReadTimeout:  30 * time.Second,
+		WriteTimeout: 30 * time.Second,
+		IdleTimeout:  120 * time.Second,
+	}
+}
+
+func listenAndServe(server *http.Server, cert, key string) error {
+	if cert == "" {
+		return server.ListenAndServe()
+	}
+	server.TLSConfig = dynamicTLSConfig(cert, key)
+	return server.ListenAndServeTLS("", "")
+}
+
+func dynamicTLSConfig(cert, key string) *tls.Config {
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+			pair, err := tls.LoadX509KeyPair(cert, key)
+			return &pair, err
+		},
+	}
+}
+
+func validateTLSFiles(cert, key string) error {
+	if (cert == "") != (key == "") {
+		return fmt.Errorf("AUTH_BRIDGE_TLS_CERT and AUTH_BRIDGE_TLS_KEY must be configured together")
+	}
+	return nil
 }
 
 func envOrDefault(key, fallback string) string {
