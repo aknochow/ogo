@@ -220,6 +220,9 @@ var _ = Describe("OpenShellGateway Controller", func() {
 
 		gw := &ogov1alpha1.OpenShellGateway{}
 		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		gw.Spec.Route.GatewayAPI.Enabled = ptr.To(true)
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
 		// Simulates the auto-install path mid-flight: the gateway pod is
 		// Ready, but Envoy Gateway hasn't provisioned the proxy Service the
 		// Route bridges to yet — the exact state that used to report

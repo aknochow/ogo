@@ -208,6 +208,11 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	if isOCP {
+		authEnabled := authBridgeEnabled(gw, isOCP)
+		if err := r.reconcileObsoleteRoutes(ctx, gw, useGWAPI, authEnabled); err != nil {
+			log.Error(err, "Failed to clean up obsolete Routes")
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "RouteCleanup", err)
+		}
 		if useGWAPI {
 			condition, err := r.reconcileEnvoyRoute(ctx, gw)
 			if condition.Type != "" {
@@ -232,7 +237,7 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 			log.Error(err, "Failed to reconcile SCC binding")
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "SCCBinding", err)
 		}
-		if authBridgeEnabled(gw, isOCP) {
+		if authEnabled {
 			if err := r.reconcileAuthBridgeRoute(ctx, gw); err != nil {
 				log.Error(err, "Failed to reconcile auth-bridge Route")
 				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "AuthBridgeRoute", err)
@@ -900,8 +905,47 @@ func (r *OpenShellGatewayReconciler) reconcileNetworkPolicy(ctx context.Context,
 
 // --- OpenShift Route ---
 
+func routeEnabled(gw *ogov1alpha1.OpenShellGateway) bool {
+	return gw.Spec.Route.Enabled == nil || *gw.Spec.Route.Enabled
+}
+
+func (r *OpenShellGatewayReconciler) reconcileObsoleteRoutes(
+	ctx context.Context,
+	gw *ogov1alpha1.OpenShellGateway,
+	useGWAPI bool,
+	authEnabled bool,
+) error {
+	enabled := routeEnabled(gw)
+	desired := map[string]bool{
+		gw.Name:           enabled && !useGWAPI,
+		gw.Name + "-gw":   enabled && useGWAPI,
+		gw.Name + "-auth": enabled && authEnabled,
+	}
+
+	routes := &unstructured.UnstructuredList{}
+	routes.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "RouteList"})
+	if err := r.List(ctx, routes, client.MatchingLabels{
+		labelManagedBy: managedByValue,
+		labelInstance:  gw.Name,
+	}); err != nil {
+		return fmt.Errorf("listing managed Routes: %w", err)
+	}
+
+	for i := range routes.Items {
+		route := &routes.Items[i]
+		keep, known := desired[route.GetName()]
+		if !known || keep {
+			continue
+		}
+		if err := r.Delete(ctx, route); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting obsolete Route %s/%s: %w", route.GetNamespace(), route.GetName(), err)
+		}
+	}
+	return nil
+}
+
 func (r *OpenShellGatewayReconciler) reconcileRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
-	if gw.Spec.Route.Enabled != nil && !*gw.Spec.Route.Enabled {
+	if !routeEnabled(gw) {
 		return nil
 	}
 
@@ -1129,15 +1173,6 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayAPI(ctx context.Context, gw
 		}
 	}
 
-	oldRoute := &unstructured.Unstructured{}
-	oldRoute.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
-	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name, Namespace: ns}, oldRoute); err == nil {
-		logf.FromContext(ctx).Info("Cleaning up direct Route superseded by Gateway API", "route", gw.Name)
-		if err := r.Delete(ctx, oldRoute); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("cleaning up superseded Route: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -1220,7 +1255,7 @@ func (r *OpenShellGatewayReconciler) reconcileGatewayTLSCert(ctx context.Context
 // up when it isn't - previously several no-route cases returned bare nil,
 // which was indistinguishable from success.
 func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (metav1.Condition, error) {
-	if gw.Spec.Route.Enabled != nil && !*gw.Spec.Route.Enabled {
+	if !routeEnabled(gw) {
 		// Zero-value Condition (empty Type) signals "nothing to report" to
 		// the call site, which skips SetStatusCondition entirely - a
 		// disabled route isn't "not ready", it's not applicable, and
@@ -1429,9 +1464,13 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 	// exists to eliminate. EnvoyRouteReady is only ever set when the
 	// Gateway API path is active, so its absence here means that path
 	// isn't in use and shouldn't block Available.
+	envoyRouteActive := routeEnabled(gw) && gatewayAPIEnabled(gw, openshift.HasGatewayAPI(r.DiscoveryClient))
 	envoyRouteBlocking := false
-	if c := meta.FindStatusCondition(gw.Status.Conditions, ogov1alpha1.ConditionEnvoyRouteReady); c != nil && c.Status != metav1.ConditionTrue {
+	if c := meta.FindStatusCondition(gw.Status.Conditions, ogov1alpha1.ConditionEnvoyRouteReady); envoyRouteActive && c != nil && c.Status != metav1.ConditionTrue {
 		envoyRouteBlocking = true
+	}
+	if !envoyRouteActive {
+		meta.RemoveStatusCondition(&latest.Status.Conditions, ogov1alpha1.ConditionEnvoyRouteReady)
 	}
 
 	switch {
@@ -1479,12 +1518,15 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		ogov1alpha1.ConditionOpenShiftGroups,
 		ogov1alpha1.ConditionEnvoyRouteReady,
 	} {
+		if condType == ogov1alpha1.ConditionEnvoyRouteReady && !envoyRouteActive {
+			continue
+		}
 		if c := meta.FindStatusCondition(gw.Status.Conditions, condType); c != nil {
 			meta.SetStatusCondition(&latest.Status.Conditions, *c)
 		}
 	}
 
-	if gw.Spec.Route.Hostname != "" {
+	if routeEnabled(gw) && gw.Spec.Route.Hostname != "" {
 		latest.Status.GatewayURL = "https://" + gw.Spec.Route.Hostname + ":443"
 	} else {
 		latest.Status.GatewayURL = fmt.Sprintf("https://%s.%s.svc.cluster.local:8080", gw.Name, ns)
@@ -1658,6 +1700,10 @@ func clusterDomain(gw *ogov1alpha1.OpenShellGateway) string {
 }
 
 func (r *OpenShellGatewayReconciler) reconcileAuthBridgeRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	if !routeEnabled(gw) {
+		return nil
+	}
+
 	ns := gatewayNamespace(gw)
 	routeName := gw.Name + "-auth"
 
