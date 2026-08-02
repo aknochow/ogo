@@ -304,22 +304,13 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 		if err := r.Delete(ctx, btpObj); err != nil && !apierrors.IsNotFound(err) {
 			log.Error(err, "Failed to delete BackendTrafficPolicy")
 		}
-		svcList := &corev1.ServiceList{}
-		if err := r.List(ctx, svcList, client.MatchingLabels{
-			"gateway.envoyproxy.io/owning-gateway-name":      gw.Name,
-			"gateway.envoyproxy.io/owning-gateway-namespace": ns,
-		}); err == nil && len(svcList.Items) > 0 {
-			envoyRoute := &unstructured.Unstructured{}
-			envoyRoute.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
-			envoyRoute.SetName(gw.Name + "-gw")
-			envoyRoute.SetNamespace(svcList.Items[0].Namespace)
-			if err := r.Delete(ctx, envoyRoute); err != nil && !apierrors.IsNotFound(err) {
-				log.Error(err, "Failed to delete Envoy Route")
-			}
-		}
 	}
 
 	var cleanupErrors []error
+	if err := r.deleteManagedRoutes(ctx, gw); err != nil && !meta.IsNoMatchError(err) && !apierrors.IsNotFound(err) {
+		log.Error(err, "Failed to delete managed Routes")
+		cleanupErrors = append(cleanupErrors, err)
+	}
 	for _, obj := range clusterResources {
 		if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			log.Error(err, "Failed to delete cluster resource", "resource", obj.GetName())
@@ -916,11 +907,12 @@ func (r *OpenShellGatewayReconciler) reconcileObsoleteRoutes(
 	authEnabled bool,
 ) error {
 	enabled := routeEnabled(gw)
-	desired := map[string]bool{
-		gw.Name:           enabled && !useGWAPI,
-		gw.Name + "-gw":   enabled && useGWAPI,
-		gw.Name + "-auth": enabled && authEnabled,
+	desired := map[types.NamespacedName]bool{
+		{Name: gw.Name, Namespace: gatewayNamespace(gw)}:           enabled && !useGWAPI,
+		{Name: gw.Name + "-gw", Namespace: envoyGatewaySystemNS}:   enabled && useGWAPI,
+		{Name: gw.Name + "-auth", Namespace: gatewayNamespace(gw)}: enabled && authEnabled,
 	}
+	managedNames := map[string]bool{gw.Name: true, gw.Name + "-gw": true, gw.Name + "-auth": true}
 
 	routes := &unstructured.UnstructuredList{}
 	routes.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "RouteList"})
@@ -933,8 +925,8 @@ func (r *OpenShellGatewayReconciler) reconcileObsoleteRoutes(
 
 	for i := range routes.Items {
 		route := &routes.Items[i]
-		keep, known := desired[route.GetName()]
-		if !known || keep {
+		key := types.NamespacedName{Name: route.GetName(), Namespace: route.GetNamespace()}
+		if !managedNames[route.GetName()] || desired[key] {
 			continue
 		}
 		if err := r.Delete(ctx, route); err != nil && !apierrors.IsNotFound(err) {
@@ -942,6 +934,29 @@ func (r *OpenShellGatewayReconciler) reconcileObsoleteRoutes(
 		}
 	}
 	return nil
+}
+
+func (r *OpenShellGatewayReconciler) deleteManagedRoutes(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	routes := &unstructured.UnstructuredList{}
+	routes.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "RouteList"})
+	if err := r.List(ctx, routes, client.MatchingLabels{
+		labelManagedBy: managedByValue,
+		labelInstance:  gw.Name,
+	}); err != nil {
+		return fmt.Errorf("listing managed Routes: %w", err)
+	}
+	for i := range routes.Items {
+		route := &routes.Items[i]
+		if err := r.Delete(ctx, route); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting managed Route %s/%s: %w", route.GetNamespace(), route.GetName(), err)
+		}
+	}
+	return nil
+}
+
+func routeManagedByGateway(route *unstructured.Unstructured, gw *ogov1alpha1.OpenShellGateway) bool {
+	labels := route.GetLabels()
+	return labels[labelManagedBy] == managedByValue && labels[labelInstance] == gw.Name
 }
 
 func (r *OpenShellGatewayReconciler) reconcileRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
@@ -982,6 +997,9 @@ func (r *OpenShellGatewayReconciler) reconcileRoute(ctx context.Context, gw *ogo
 	}
 	if err != nil {
 		return err
+	}
+	if !routeManagedByGateway(existing, gw) {
+		return fmt.Errorf("route %s/%s exists but is not managed by OGO", ns, gw.Name)
 	}
 
 	existingHost, _, _ := unstructured.NestedString(existing.Object, "spec", "host")
@@ -1351,6 +1369,13 @@ func (r *OpenShellGatewayReconciler) reconcileEnvoyRoute(ctx context.Context, gw
 				Reason: "GetFailed", Message: "Failed to get existing Route - see operator logs for details",
 			},
 			fmt.Errorf("getting envoy route: %w", err)
+	}
+	if !routeManagedByGateway(existing, gw) {
+		return metav1.Condition{
+				Type: ogov1alpha1.ConditionEnvoyRouteReady, Status: metav1.ConditionFalse,
+				Reason: "OwnershipConflict", Message: "Route exists but is not managed by OGO",
+			},
+			fmt.Errorf("route %s/%s exists but is not managed by OGO", existing.GetNamespace(), existing.GetName())
 	}
 
 	// Keep the Route in sync with the CR's current desired state - the
@@ -1732,7 +1757,13 @@ func (r *OpenShellGatewayReconciler) reconcileAuthBridgeRoute(ctx context.Contex
 		route.Object["spec"] = spec
 		return r.Create(ctx, route)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	if !routeManagedByGateway(existing, gw) {
+		return fmt.Errorf("route %s/%s exists but is not managed by OGO", ns, routeName)
+	}
+	return nil
 }
 
 func (r *OpenShellGatewayReconciler) reconcileOAuthClient(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
