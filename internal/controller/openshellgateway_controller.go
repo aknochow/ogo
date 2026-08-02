@@ -30,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -185,6 +186,7 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		{"Role", r.reconcileRole},
 		{"RoleBinding", r.reconcileRoleBinding},
 		{"TLS", r.reconcileTLS},
+		{"AuthBridgeCA", r.reconcileAuthBridgeCA},
 		{"JWTKeys", r.reconcileJWTKeys},
 		{"AuthBridgeKeys", r.reconcileAuthBridgeKeys},
 		{"ConfigMap", r.reconcileConfigMap},
@@ -335,6 +337,18 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 				cleanupErrors = append(cleanupErrors, err)
 			}
 		}
+	}
+
+	authCA := &corev1.ConfigMap{}
+	authCAKey := types.NamespacedName{Name: gw.Name + "-auth-ca", Namespace: ns}
+	if err := r.Get(ctx, authCAKey, authCA); err == nil {
+		if authCA.Labels[labelManagedBy] == managedByValue && authCA.Labels[labelInstance] == gw.Name {
+			if err := r.Delete(ctx, authCA); err != nil && !apierrors.IsNotFound(err) {
+				cleanupErrors = append(cleanupErrors, err)
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
+		cleanupErrors = append(cleanupErrors, err)
 	}
 
 	if len(cleanupErrors) > 0 {
@@ -563,6 +577,60 @@ func (r *OpenShellGatewayReconciler) reconcileSelfSignedTLS(ctx context.Context,
 	return nil
 }
 
+func (r *OpenShellGatewayReconciler) reconcileAuthBridgeCA(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	name := gw.Name + "-auth-ca"
+	namespace := gatewayNamespace(gw)
+	configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
+	tlsEnabled := gw.Spec.TLS.Enabled == nil || *gw.Spec.TLS.Enabled
+	if !tlsEnabled || !authBridgeEnabled(gw, openshift.IsOpenShift(r.DiscoveryClient)) {
+		if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, configMap); err != nil {
+			if apierrors.IsNotFound(err) {
+				return nil
+			}
+			return err
+		}
+		if configMap.Labels[labelManagedBy] == managedByValue && configMap.Labels[labelInstance] == gw.Name {
+			return r.Delete(ctx, configMap)
+		}
+		return nil
+	}
+
+	destinationCA, err := r.serverTLSCA(ctx, gw)
+	if err != nil {
+		return err
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, configMap, func() error {
+		if !configMap.CreationTimestamp.IsZero() &&
+			(configMap.Labels[labelManagedBy] != managedByValue || configMap.Labels[labelInstance] != gw.Name) {
+			return fmt.Errorf("existing ConfigMap %s/%s is not managed by OGO", namespace, name)
+		}
+		configMap.Labels = gatewayLabels(gw)
+		configMap.Data = map[string]string{"ca.crt": string(destinationCA)}
+		configMap.BinaryData = nil
+		return nil
+	})
+	return err
+}
+
+func (r *OpenShellGatewayReconciler) serverTLSCA(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) ([]byte, error) {
+	secretName := gw.Name + "-server-tls"
+	if gw.Spec.TLS.ServerCertSecretName != "" {
+		secretName = gw.Spec.TLS.ServerCertSecretName
+	}
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: gatewayNamespace(gw)}, secret); err != nil {
+		return nil, fmt.Errorf("reading server TLS CA: %w", err)
+	}
+	destinationCA := secret.Data["ca.crt"]
+	if len(destinationCA) == 0 {
+		destinationCA = secret.Data[corev1.TLSCertKey]
+	}
+	if len(destinationCA) == 0 {
+		return nil, fmt.Errorf("server TLS secret %q has neither ca.crt nor tls.crt", secretName)
+	}
+	return destinationCA, nil
+}
+
 // --- JWT Keys ---
 
 func (r *OpenShellGatewayReconciler) reconcileJWTKeys(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
@@ -757,46 +825,62 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 		containers := []corev1.Container{container}
 
 		if authBridgeEnabled(gw, isOCP) {
-			authBridgeIssuer := authBridgeInternalURL(gw)
-			authBridgeExtIssuer := authBridgeExternalURL(gw)
-			oauthServerURL := "https://oauth-openshift." + clusterDomain(gw)
+			authPortName := "auth"
+			authPort := int32(8085)
+			probeScheme := corev1.URISchemeHTTP
+			authEnv := []corev1.EnvVar{
+				{Name: "AUTH_BRIDGE_ISSUER", Value: authBridgeInternalURL(gw)},
+				{Name: "AUTH_BRIDGE_EXTERNAL_ISSUER", Value: authBridgeExternalURL(gw)},
+				{Name: "AUTH_BRIDGE_OPENSHIFT_ISSUER", Value: "https://oauth-openshift." + clusterDomain(gw)},
+				{Name: "AUTH_BRIDGE_CLIENT_ID", Value: "openshell"},
+				{Name: "AUTH_BRIDGE_CLIENT_SECRET", ValueFrom: &corev1.EnvVarSource{
+					SecretKeyRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: gw.Name + "-oauth-client"},
+						Key:                  "secret",
+					},
+				}},
+				{Name: "AUTH_BRIDGE_USER_GROUP", Value: gw.Spec.Auth.OpenShift.UserGroup},
+				{Name: "AUTH_BRIDGE_ADMIN_GROUP", Value: gw.Spec.Auth.OpenShift.AdminGroup},
+				{Name: "AUTH_BRIDGE_TOKEN_TTL", Value: tokenTTL(gw)},
+				{Name: "AUTH_BRIDGE_SIGNING_KEY", Value: "/etc/auth-bridge-keys/signing.pem"},
+				{Name: "AUTH_BRIDGE_PUBLIC_KEY", Value: "/etc/auth-bridge-keys/public.pem"},
+				{Name: "AUTH_BRIDGE_KID", Value: "/etc/auth-bridge-keys/kid"},
+			}
+			authVolumeMounts := []corev1.VolumeMount{
+				{Name: "auth-bridge-keys", MountPath: "/etc/auth-bridge-keys", ReadOnly: true},
+			}
+			if tlsEnabled {
+				authPortName = "auth-tls"
+				authPort = 8443
+				probeScheme = corev1.URISchemeHTTPS
+				authEnv = append(authEnv,
+					corev1.EnvVar{Name: "AUTH_BRIDGE_LISTEN", Value: "127.0.0.1:8085"},
+					corev1.EnvVar{Name: "AUTH_BRIDGE_TLS_LISTEN", Value: ":8443"},
+					corev1.EnvVar{Name: "AUTH_BRIDGE_TLS_CERT", Value: "/etc/auth-bridge-tls/tls.crt"},
+					corev1.EnvVar{Name: "AUTH_BRIDGE_TLS_KEY", Value: "/etc/auth-bridge-tls/tls.key"},
+				)
+				authVolumeMounts = append(authVolumeMounts,
+					corev1.VolumeMount{Name: "tls-cert", MountPath: "/etc/auth-bridge-tls", ReadOnly: true},
+				)
+			}
 			containers = append(containers, corev1.Container{
-				Name:  "auth-bridge",
-				Image: authBridgeImage(gw),
-				Env: []corev1.EnvVar{
-					{Name: "AUTH_BRIDGE_ISSUER", Value: authBridgeIssuer},
-					{Name: "AUTH_BRIDGE_EXTERNAL_ISSUER", Value: authBridgeExtIssuer},
-					{Name: "AUTH_BRIDGE_OPENSHIFT_ISSUER", Value: oauthServerURL},
-					{Name: "AUTH_BRIDGE_CLIENT_ID", Value: "openshell"},
-					{Name: "AUTH_BRIDGE_CLIENT_SECRET", ValueFrom: &corev1.EnvVarSource{
-						SecretKeyRef: &corev1.SecretKeySelector{
-							LocalObjectReference: corev1.LocalObjectReference{Name: gw.Name + "-oauth-client"},
-							Key:                  "secret",
-						},
-					}},
-					{Name: "AUTH_BRIDGE_USER_GROUP", Value: gw.Spec.Auth.OpenShift.UserGroup},
-					{Name: "AUTH_BRIDGE_ADMIN_GROUP", Value: gw.Spec.Auth.OpenShift.AdminGroup},
-					{Name: "AUTH_BRIDGE_TOKEN_TTL", Value: tokenTTL(gw)},
-					{Name: "AUTH_BRIDGE_SIGNING_KEY", Value: "/etc/auth-bridge-keys/signing.pem"},
-					{Name: "AUTH_BRIDGE_PUBLIC_KEY", Value: "/etc/auth-bridge-keys/public.pem"},
-					{Name: "AUTH_BRIDGE_KID", Value: "/etc/auth-bridge-keys/kid"},
-				},
-				VolumeMounts: []corev1.VolumeMount{
-					{Name: "auth-bridge-keys", MountPath: "/etc/auth-bridge-keys", ReadOnly: true},
-				},
+				Name:         "auth-bridge",
+				Image:        authBridgeImage(gw),
+				Env:          authEnv,
+				VolumeMounts: authVolumeMounts,
 				Ports: []corev1.ContainerPort{
-					{Name: "auth", ContainerPort: 8085, Protocol: corev1.ProtocolTCP},
+					{Name: authPortName, ContainerPort: authPort, Protocol: corev1.ProtocolTCP},
 				},
 				LivenessProbe: &corev1.Probe{
-					ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromString("auth")}},
+					ProbeHandler:  corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromString(authPortName), Scheme: probeScheme}},
 					PeriodSeconds: 10,
 				},
 				ReadinessProbe: &corev1.Probe{
-					ProbeHandler:        corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromString("auth")}},
+					ProbeHandler:        corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromString(authPortName), Scheme: probeScheme}},
 					InitialDelaySeconds: 1, PeriodSeconds: 5,
 				},
 				StartupProbe: &corev1.Probe{
-					ProbeHandler:     corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromString("auth")}},
+					ProbeHandler:     corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Path: "/healthz", Port: intstr.FromString(authPortName), Scheme: probeScheme}},
 					PeriodSeconds:    2,
 					FailureThreshold: 15,
 				},
@@ -854,7 +938,13 @@ func (r *OpenShellGatewayReconciler) reconcileService(ctx context.Context, gw *o
 			{Name: "metrics", Port: 9090, TargetPort: intstr.FromString("metrics"), Protocol: corev1.ProtocolTCP},
 		}
 		if authBridgeEnabled(gw, isOCP) {
-			ports = append(ports, corev1.ServicePort{Name: "auth", Port: 8085, TargetPort: intstr.FromString("auth"), Protocol: corev1.ProtocolTCP})
+			targetPort := "auth"
+			if gw.Spec.TLS.Enabled == nil || *gw.Spec.TLS.Enabled {
+				targetPort = "auth-tls"
+			}
+			ports = append(ports, corev1.ServicePort{
+				Name: "auth", Port: 8085, TargetPort: intstr.FromString(targetPort), Protocol: corev1.ProtocolTCP,
+			})
 		}
 		svc.Spec = corev1.ServiceSpec{
 			Type:     corev1.ServiceTypeClusterIP,
@@ -1599,7 +1689,10 @@ func computeServerSANs(gw *ogov1alpha1.OpenShellGateway) []string {
 		"127.0.0.1",
 	}
 	if gw.Spec.Route.Hostname != "" {
-		sans = append(sans, gw.Spec.Route.Hostname)
+		sans = append(sans,
+			gw.Spec.Route.Hostname,
+			"openshell-auth."+domainSuffix(gw.Spec.Route.Hostname),
+		)
 	}
 	return sans
 }
@@ -1633,10 +1726,15 @@ func domainSuffix(hostname string) string {
 }
 
 func authBridgeExternalURL(gw *ogov1alpha1.OpenShellGateway) string {
-	if gw.Spec.Route.Hostname != "" {
+	routeEnabled := gw.Spec.Route.Enabled == nil || *gw.Spec.Route.Enabled
+	if routeEnabled && gw.Spec.Route.Hostname != "" {
 		return "https://openshell-auth." + domainSuffix(gw.Spec.Route.Hostname)
 	}
-	return "http://openshell-auth." + gatewayNamespace(gw) + ".svc:8085"
+	scheme := "https"
+	if gw.Spec.TLS.Enabled != nil && !*gw.Spec.TLS.Enabled {
+		scheme = "http"
+	}
+	return fmt.Sprintf("%s://%s.%s.svc:8085", scheme, gw.Name, gatewayNamespace(gw))
 }
 
 func authBridgeInternalURL(_ *ogov1alpha1.OpenShellGateway) string {
@@ -1660,33 +1758,82 @@ func clusterDomain(gw *ogov1alpha1.OpenShellGateway) string {
 func (r *OpenShellGatewayReconciler) reconcileAuthBridgeRoute(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
 	ns := gatewayNamespace(gw)
 	routeName := gw.Name + "-auth"
+	hostname := ""
+	if gw.Spec.Route.Hostname != "" {
+		hostname = "openshell-auth." + domainSuffix(gw.Spec.Route.Hostname)
+	}
+	tlsConfig, err := r.authBridgeRouteTLS(ctx, gw)
+	if err != nil {
+		return err
+	}
+	spec := map[string]interface{}{
+		"to":             map[string]interface{}{"kind": "Service", "name": gw.Name, "weight": int64(100)},
+		"port":           map[string]interface{}{"targetPort": "auth"},
+		"tls":            tlsConfig,
+		"wildcardPolicy": "None",
+	}
+	if hostname != "" {
+		spec["host"] = hostname
+	}
 
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
-	err := r.Get(ctx, types.NamespacedName{Name: routeName, Namespace: ns}, existing)
+	err = r.Get(ctx, types.NamespacedName{Name: routeName, Namespace: ns}, existing)
 	if apierrors.IsNotFound(err) {
-		hostname := ""
-		if gw.Spec.Route.Hostname != "" {
-			hostname = "openshell-auth." + domainSuffix(gw.Spec.Route.Hostname)
-		}
-
 		route := &unstructured.Unstructured{}
 		route.SetGroupVersionKind(schema.GroupVersionKind{Group: "route.openshift.io", Version: "v1", Kind: "Route"})
 		route.SetName(routeName)
 		route.SetNamespace(ns)
 		route.SetLabels(gatewayLabels(gw))
-		spec := map[string]interface{}{
-			"to":   map[string]interface{}{"kind": "Service", "name": gw.Name},
-			"port": map[string]interface{}{"targetPort": "auth"},
-			"tls":  map[string]interface{}{"termination": "edge", "insecureEdgeTerminationPolicy": "Redirect"},
-		}
-		if hostname != "" {
-			spec["host"] = hostname
-		}
 		route.Object["spec"] = spec
 		return r.Create(ctx, route)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	labels := existing.GetLabels()
+	if labels[labelManagedBy] != managedByValue || labels[labelInstance] != gw.Name {
+		return fmt.Errorf("route %s/%s exists but is not managed by OGO", ns, routeName)
+	}
+
+	existingSpec, _, err := unstructured.NestedMap(existing.Object, "spec")
+	if err != nil {
+		return fmt.Errorf("reading auth-bridge Route spec: %w", err)
+	}
+	if hostname == "" {
+		if existingHost, _, _ := unstructured.NestedString(existing.Object, "spec", "host"); existingHost != "" {
+			spec["host"] = existingHost
+		}
+	}
+	if apiequality.Semantic.DeepEqual(existingSpec, spec) {
+		return nil
+	}
+	existing.Object["spec"] = spec
+	return r.Update(ctx, existing)
+}
+
+func (r *OpenShellGatewayReconciler) authBridgeRouteTLS(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (map[string]interface{}, error) {
+	if gw.Spec.TLS.Enabled != nil && !*gw.Spec.TLS.Enabled {
+		return map[string]interface{}{
+			"termination":                   "edge",
+			"insecureEdgeTerminationPolicy": "Redirect",
+		}, nil
+	}
+
+	configMapName := gw.Name + "-auth-ca"
+	configMap := &corev1.ConfigMap{}
+	if err := r.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: gatewayNamespace(gw)}, configMap); err != nil {
+		return nil, fmt.Errorf("reading auth-bridge CA ConfigMap: %w", err)
+	}
+	destinationCA := configMap.Data["ca.crt"]
+	if destinationCA == "" {
+		return nil, fmt.Errorf("auth-bridge CA ConfigMap %q is missing ca.crt", configMapName)
+	}
+	return map[string]interface{}{
+		"termination":                   "reencrypt",
+		"insecureEdgeTerminationPolicy": "Redirect",
+		"destinationCACertificate":      destinationCA,
+	}, nil
 }
 
 func (r *OpenShellGatewayReconciler) reconcileOAuthClient(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {

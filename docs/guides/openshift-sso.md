@@ -59,6 +59,27 @@ oc adm groups add-users openshell-users alice bob
 This check does not affect mTLS authentication (used by CI/automation)
 or the internal sandbox bootstrap (K8s ServiceAccount tokens).
 
+## Internal workload clients
+
+When gateway TLS is enabled, the auth bridge exposes HTTPS through the
+Gateway Service on port 8085. OGO publishes the verification certificate
+without private keys in the `<gateway>-auth-ca` ConfigMap in the gateway
+namespace.
+
+A workload in that namespace can mount the ConfigMap directly. For a
+workload in another namespace, copy only `ca.crt` into a ConfigMap in the
+workload namespace and mount that copy. The client can then verify the
+internal endpoint without access to a TLS Secret:
+
+```bash
+curl --cacert /path/to/ca.crt \
+  https://<gateway>.<gateway-namespace>.svc:8085/healthz
+```
+
+The co-located OpenShell gateway continues to use the loopback-only HTTP
+listener for OIDC discovery. Plain HTTP is not exposed through the Service
+when TLS is enabled.
+
 ## Troubleshooting
 
 ### "access denied: you are not a member of the required OpenShift group"

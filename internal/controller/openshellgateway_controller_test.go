@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -252,6 +253,73 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		Expect(svc.Spec.Ports).To(HaveLen(2))
 	})
 
+	It("should expose the auth bridge over TLS", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		gw.Spec.Auth.OpenShift.Enabled = ptr.To(true)
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+		Expect(r.reconcileAuthBridgeCA(ctx, gw)).To(Succeed())
+		Expect(r.reconcileDeployment(ctx, gw)).To(Succeed())
+		Expect(r.reconcileService(ctx, gw)).To(Succeed())
+
+		deploy := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, deploy)).To(Succeed())
+		var authBridge *corev1.Container
+		for i := range deploy.Spec.Template.Spec.Containers {
+			if deploy.Spec.Template.Spec.Containers[i].Name == "auth-bridge" {
+				authBridge = &deploy.Spec.Template.Spec.Containers[i]
+				break
+			}
+		}
+		Expect(authBridge).NotTo(BeNil())
+		Expect(authBridge.Ports).To(ContainElement(corev1.ContainerPort{
+			Name: "auth-tls", ContainerPort: 8443, Protocol: corev1.ProtocolTCP,
+		}))
+		Expect(authBridge.ReadinessProbe.HTTPGet.Scheme).To(Equal(corev1.URISchemeHTTPS))
+		Expect(authBridge.VolumeMounts).To(ContainElement(corev1.VolumeMount{
+			Name: "tls-cert", MountPath: "/etc/auth-bridge-tls", ReadOnly: true,
+		}))
+		env := map[string]string{}
+		for _, variable := range authBridge.Env {
+			env[variable.Name] = variable.Value
+		}
+		Expect(env).To(HaveKeyWithValue("AUTH_BRIDGE_LISTEN", "127.0.0.1:8085"))
+		Expect(env).To(HaveKeyWithValue("AUTH_BRIDGE_TLS_LISTEN", ":8443"))
+		Expect(env).To(HaveKeyWithValue("AUTH_BRIDGE_TLS_CERT", "/etc/auth-bridge-tls/tls.crt"))
+		Expect(env).To(HaveKeyWithValue("AUTH_BRIDGE_TLS_KEY", "/etc/auth-bridge-tls/tls.key"))
+
+		ca := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-auth-ca", Namespace: "ogo-test"}, ca)).To(Succeed())
+		Expect(ca.Data).To(HaveLen(1))
+		Expect(ca.Data["ca.crt"]).NotTo(BeEmpty())
+		ca.BinaryData = map[string][]byte{"tls.key": []byte("drift")}
+		Expect(k8sClient.Update(ctx, ca)).To(Succeed())
+		Expect(r.reconcileAuthBridgeCA(ctx, gw)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-auth-ca", Namespace: "ogo-test"}, ca)).To(Succeed())
+		Expect(ca.BinaryData).To(BeEmpty())
+
+		svc := &corev1.Service{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, svc)).To(Succeed())
+		var authPort *corev1.ServicePort
+		for i := range svc.Spec.Ports {
+			if svc.Spec.Ports[i].Name == "auth" {
+				authPort = &svc.Spec.Ports[i]
+				break
+			}
+		}
+		Expect(authPort).NotTo(BeNil())
+		Expect(authPort.TargetPort).To(Equal(intstr.FromString("auth-tls")))
+
+		gw.Spec.TLS.Enabled = ptr.To(false)
+		Expect(r.reconcileAuthBridgeCA(ctx, gw)).To(Succeed())
+		Expect(errors.IsNotFound(k8sClient.Get(ctx,
+			types.NamespacedName{Name: gwName + "-auth-ca", Namespace: "ogo-test"}, &corev1.ConfigMap{}))).To(BeTrue())
+	})
+
 	It("should set status URL from route hostname", func() {
 		r := reconciler()
 		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
@@ -413,6 +481,10 @@ var _ = Describe("OpenShellGateway Controller", func() {
 
 		gw := &ogov1alpha1.OpenShellGateway{}
 		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		ca := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+			Name: gwName + "-auth-ca", Namespace: "ogo-test", Labels: gatewayLabels(gw),
+		}}
+		Expect(k8sClient.Create(ctx, ca)).To(Succeed())
 		Expect(k8sClient.Delete(ctx, gw)).To(Succeed())
 
 		// Reconcile handles the finalizer
@@ -421,6 +493,8 @@ var _ = Describe("OpenShellGateway Controller", func() {
 
 		cr := &rbacv1.ClusterRole{}
 		err = k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-node-reader"}, cr)
+		Expect(errors.IsNotFound(err)).To(BeTrue())
+		err = k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-auth-ca", Namespace: "ogo-test"}, &corev1.ConfigMap{})
 		Expect(errors.IsNotFound(err)).To(BeTrue())
 	})
 })
