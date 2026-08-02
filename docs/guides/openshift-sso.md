@@ -43,6 +43,11 @@ spec:
       tokenTTL: "8h"             # JWT lifetime
 ```
 
+Browser SSO requires `spec.route.enabled` to be true and an explicit
+`spec.route.hostname`. The OAuth callback uses the derived public auth Route
+hostname. With routing disabled, use the internal HTTPS Service for headless
+token exchange instead; no browser callback is available.
+
 ## User group (required)
 
 The `userGroup` field specifies the OpenShift group required for SSO access.
@@ -79,6 +84,11 @@ curl --cacert /path/to/ca.crt \
 The co-located OpenShell gateway continues to use the loopback-only HTTP
 listener for OIDC discovery. Plain HTTP is not exposed through the Service
 when TLS is enabled.
+
+If `spec.tls.serverCertSecretName` supplies a custom server certificate, its
+SANs must cover `<gateway>.<gateway-namespace>.svc` and, when browser SSO is
+used, the derived auth Route hostname. The Secret should include `ca.crt`; OGO
+falls back to publishing the public `tls.crt` when it is absent.
 
 ## Troubleshooting
 
