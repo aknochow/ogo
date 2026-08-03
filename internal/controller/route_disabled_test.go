@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
@@ -242,8 +243,9 @@ func TestRouteReconcilersRejectUnmanagedCollisions(t *testing.T) {
 			route := newTestRoute(tt.routeName, tt.namespace, false)
 			objects := append(tt.objects, route)
 			r := &OpenShellGatewayReconciler{Client: newRouteClient(objects...)}
-			if err := tt.run(r); err == nil {
-				t.Fatal("expected unmanaged Route conflict")
+			err := tt.run(r)
+			if err == nil || !strings.Contains(err.Error(), "not managed by OGO") {
+				t.Fatalf("error = %v, want unmanaged Route conflict", err)
 			}
 			got := &unstructured.Unstructured{}
 			got.SetGroupVersionKind(routeGVK)
