@@ -7,6 +7,16 @@ tags: [claude, vertex, gcp, inference]
 
 # Claude Code with Vertex AI
 
+> **Warning:** The Provider and Policy CRs below do not yet have any
+> effect on the running gateway (see
+> [Provider](../concepts/provider.md) and [Policy](../concepts/policy.md)).
+> Following this example as written will not actually configure GCP
+> credential refresh or allow network access to Vertex AI endpoints -
+> the sandbox will run under the gateway's default policy, which permits
+> no external network access. Tracked in
+> [#51](https://github.com/aknochow/ogo/issues/51) and
+> [#52](https://github.com/aknochow/ogo/issues/52).
+
 This example configures OGO to run Claude Code in sandboxes using Google
 Vertex AI for inference. The gateway manages GCP credential refresh - no
 `gcloud` CLI needed in sandboxes.
