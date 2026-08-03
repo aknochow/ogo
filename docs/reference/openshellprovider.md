@@ -8,6 +8,12 @@ tags: [crd, provider, credentials]
 
 # OpenShellProvider
 
+> **Warning:** This CRD currently only validates that the referenced
+> Secret and key exist. It does not sync credentials or configuration to
+> the running OpenShell gateway yet. `phase: Synced` reflects validation
+> only, not enforcement. Tracked in
+> [#51](https://github.com/aknochow/ogo/issues/51).
+
 **API Group:** `gateway.ogo.aknochow.io`
 **Version:** `v1alpha1`
 **Scope:** Namespaced (in the gateway namespace)

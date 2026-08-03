@@ -1866,7 +1866,6 @@ func (r *OpenShellGatewayReconciler) reconcileAuthBridgeRoute(ctx context.Contex
 		route.Object["spec"] = spec
 		return r.Create(ctx, route)
 	}
-
 	existingSpec, _, err := unstructured.NestedMap(existing.Object, "spec")
 	if err != nil {
 		return fmt.Errorf("reading auth-bridge Route spec: %w", err)
