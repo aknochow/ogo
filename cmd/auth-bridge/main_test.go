@@ -119,6 +119,36 @@ func TestValidateTLSFiles(t *testing.T) {
 	}
 }
 
+func TestResolveListenAddr(t *testing.T) {
+	for _, tt := range []struct {
+		name          string
+		explicit      string
+		explicitlySet bool
+		tlsConfigured bool
+		want          string
+	}{
+		{name: "no tls, unset defaults to all interfaces", want: ":8085"},
+		{name: "tls configured, unset defaults to loopback only", tlsConfigured: true, want: "127.0.0.1:8085"},
+		{name: "no tls, explicit value honored", explicit: ":9000", explicitlySet: true, want: ":9000"},
+		{
+			name:     "tls configured, explicit non-loopback value still honored",
+			explicit: ":8085", explicitlySet: true, tlsConfigured: true, want: ":8085",
+		},
+		{
+			name:     "tls configured, explicit loopback value honored",
+			explicit: "127.0.0.1:9000", explicitlySet: true, tlsConfigured: true, want: "127.0.0.1:9000",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveListenAddr(tt.explicit, tt.explicitlySet, tt.tlsConfigured)
+			if got != tt.want {
+				t.Fatalf("resolveListenAddr(%q, %v, %v) = %q, want %q",
+					tt.explicit, tt.explicitlySet, tt.tlsConfigured, got, tt.want)
+			}
+		})
+	}
+}
+
 func tlsFiles(t *testing.T) (string, string) {
 	t.Helper()
 	dir := t.TempDir()

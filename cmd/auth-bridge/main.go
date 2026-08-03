@@ -34,11 +34,19 @@ import (
 func main() {
 	internalIssuer := envOrDefault("AUTH_BRIDGE_ISSUER", "http://localhost:8085")
 	externalIssuer := envOrDefault("AUTH_BRIDGE_EXTERNAL_ISSUER", internalIssuer)
+
+	tlsCert := os.Getenv("AUTH_BRIDGE_TLS_CERT")
+	tlsKey := os.Getenv("AUTH_BRIDGE_TLS_KEY")
+	if err := validateTLSFiles(tlsCert, tlsKey); err != nil {
+		log.Fatal(err)
+	}
+	explicitListen, listenExplicitlySet := os.LookupEnv("AUTH_BRIDGE_LISTEN")
+
 	config := authbridge.Config{
 		Issuer:         internalIssuer,
 		ExternalIssuer: externalIssuer,
 		Audience:       envOrDefault("AUTH_BRIDGE_AUDIENCE", "openshell-cli"),
-		ListenAddr:     envOrDefault("AUTH_BRIDGE_LISTEN", ":8085"),
+		ListenAddr:     resolveListenAddr(explicitListen, listenExplicitlySet, tlsCert != ""),
 		OpenShiftOAuth: envOrDefault("AUTH_BRIDGE_OPENSHIFT_ISSUER", "https://oauth-openshift.apps.example.com"),
 		ClientID:       envOrDefault("AUTH_BRIDGE_CLIENT_ID", "openshell"),
 		ClientSecret:   os.Getenv("AUTH_BRIDGE_CLIENT_SECRET"),
@@ -62,11 +70,6 @@ func main() {
 
 	handler := server.Handler()
 	servers := []*http.Server{newHTTPServer(config.ListenAddr, handler)}
-	tlsCert := os.Getenv("AUTH_BRIDGE_TLS_CERT")
-	tlsKey := os.Getenv("AUTH_BRIDGE_TLS_KEY")
-	if err := validateTLSFiles(tlsCert, tlsKey); err != nil {
-		log.Fatal(err)
-	}
 	if tlsCert != "" {
 		servers = append(servers, newHTTPServer(envOrDefault("AUTH_BRIDGE_TLS_LISTEN", ":8443"), handler))
 	}
@@ -164,6 +167,20 @@ func validateTLSFiles(cert, key string) error {
 		}
 	}
 	return nil
+}
+
+// resolveListenAddr decides the plaintext HTTP listen address. An address the
+// caller set explicitly via AUTH_BRIDGE_LISTEN is always honored, even if TLS
+// is configured. Otherwise, once TLS is configured, the plaintext listener
+// defaults to loopback-only (127.0.0.1:8085) instead of all interfaces.
+func resolveListenAddr(explicit string, explicitlySet, tlsConfigured bool) string {
+	if explicitlySet {
+		return explicit
+	}
+	if tlsConfigured {
+		return "127.0.0.1:8085"
+	}
+	return ":8085"
 }
 
 func envOrDefault(key, fallback string) string {
