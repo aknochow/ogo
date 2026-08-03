@@ -122,18 +122,46 @@ func listenAndServe(server *http.Server, cert, key string) error {
 }
 
 func dynamicTLSConfig(cert, key string) *tls.Config {
+	return dynamicTLSConfigWithTTL(cert, key, 5*time.Minute)
+}
+
+func dynamicTLSConfigWithTTL(cert, key string, cacheTTL time.Duration) *tls.Config {
+	var mu sync.Mutex
+	var cached *tls.Certificate
+	var cachedAt time.Time
+
+	loadCertificate := func() (*tls.Certificate, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if cached != nil && time.Since(cachedAt) < cacheTTL {
+			return cached, nil
+		}
+		pair, err := tls.LoadX509KeyPair(cert, key)
+		if err != nil {
+			if cached != nil {
+				return cached, nil
+			}
+			return nil, err
+		}
+		cached = &pair
+		cachedAt = time.Now()
+		return cached, nil
+	}
+
 	return &tls.Config{
-		MinVersion: tls.VersionTLS12,
-		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-			pair, err := tls.LoadX509KeyPair(cert, key)
-			return &pair, err
-		},
+		MinVersion:     tls.VersionTLS12,
+		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return loadCertificate() },
 	}
 }
 
 func validateTLSFiles(cert, key string) error {
 	if (cert == "") != (key == "") {
 		return fmt.Errorf("AUTH_BRIDGE_TLS_CERT and AUTH_BRIDGE_TLS_KEY must be configured together")
+	}
+	if cert != "" {
+		if _, err := tls.LoadX509KeyPair(cert, key); err != nil {
+			return fmt.Errorf("loading TLS cert/key: %w", err)
+		}
 	}
 	return nil
 }
