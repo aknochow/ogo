@@ -99,9 +99,31 @@ var _ = Describe("PostgreSQLReconciler", func() {
 		deploy := &appsv1.Deployment{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "test-gw-pg", Namespace: ns}, deploy)).To(Succeed())
 		Expect(deploy.Labels[labelProvisionedBy]).To(Equal(provisionedByOGO))
+		Expect(deploy.Spec.Strategy.Type).To(Equal(appsv1.RecreateDeploymentStrategyType))
 
 		svc := &corev1.Service{}
 		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "test-gw-pg", Namespace: ns}, svc)).To(Succeed())
+	})
+
+	It("should replace an existing rolling update strategy", func() {
+		r := &PostgreSQLReconciler{Client: k8sClient}
+		_, err := r.Reconcile(ctx, gw())
+		Expect(err).NotTo(HaveOccurred())
+
+		deploy := &appsv1.Deployment{}
+		key := types.NamespacedName{Name: "test-gw-pg", Namespace: ns}
+		Expect(k8sClient.Get(ctx, key, deploy)).To(Succeed())
+		deploy.Spec.Strategy = appsv1.DeploymentStrategy{
+			Type:          appsv1.RollingUpdateDeploymentStrategyType,
+			RollingUpdate: &appsv1.RollingUpdateDeployment{},
+		}
+		Expect(k8sClient.Update(ctx, deploy)).To(Succeed())
+
+		_, err = r.Reconcile(ctx, gw())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(k8sClient.Get(ctx, key, deploy)).To(Succeed())
+		Expect(deploy.Spec.Strategy.Type).To(Equal(appsv1.RecreateDeploymentStrategyType))
+		Expect(deploy.Spec.Strategy.RollingUpdate).To(BeNil())
 	})
 
 	It("should use custom storage size from embeddedConfig", func() {
