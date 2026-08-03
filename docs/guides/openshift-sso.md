@@ -90,6 +90,11 @@ SANs must cover `<gateway>.<gateway-namespace>.svc` and, when browser SSO is
 used, the derived auth Route hostname. The Secret should include `ca.crt`; OGO
 falls back to publishing the public `tls.crt` when it is absent.
 
+The auth bridge validates the certificate and key before serving, then caches
+the last valid pair for five minutes. It reloads rotated files after the cache
+expires. If the files are temporarily inconsistent during rotation, the bridge
+continues serving the last valid pair until it can load the replacement.
+
 ## Troubleshooting
 
 ### "access denied: you are not a member of the required OpenShift group"
