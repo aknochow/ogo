@@ -92,6 +92,19 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		}
 	}
 
+	setupExternalServerCertGateway := func(secretName string) (*OpenShellGatewayReconciler, *ogov1alpha1.OpenShellGateway) {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		gw.Spec.Auth.OpenShift.Enabled = ptr.To(true)
+		gw.Spec.TLS.ServerCertSecretName = secretName
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+		return r, gw
+	}
+
 	It("should add a finalizer on first reconcile", func() {
 		r := reconciler()
 		result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
@@ -324,15 +337,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 	})
 
 	It("should require an explicit ca.crt for an external server certificate secret", func() {
-		r := reconciler()
-		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
-		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
-
-		gw := &ogov1alpha1.OpenShellGateway{}
-		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
-		gw.Spec.Auth.OpenShift.Enabled = ptr.To(true)
-		gw.Spec.TLS.ServerCertSecretName = "external-tls-no-ca"
-		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+		r, gw := setupExternalServerCertGateway("external-tls-no-ca")
 
 		externalSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "external-tls-no-ca", Namespace: "ogo-test"},
@@ -350,15 +355,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 	})
 
 	It("should publish the external secret's ca.crt, not its rotating leaf certificate", func() {
-		r := reconciler()
-		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
-		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
-
-		gw := &ogov1alpha1.OpenShellGateway{}
-		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
-		gw.Spec.Auth.OpenShift.Enabled = ptr.To(true)
-		gw.Spec.TLS.ServerCertSecretName = "external-tls-with-ca"
-		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+		r, gw := setupExternalServerCertGateway("external-tls-with-ca")
 
 		externalSecret := &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "external-tls-with-ca", Namespace: "ogo-test"},

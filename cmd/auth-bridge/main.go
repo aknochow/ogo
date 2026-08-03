@@ -169,10 +169,14 @@ func validateTLSFiles(cert, key string) error {
 	return nil
 }
 
-// resolveListenAddr decides the plaintext HTTP listen address. An address the
-// caller set explicitly via AUTH_BRIDGE_LISTEN is always honored, even if TLS
-// is configured. Otherwise, once TLS is configured, the plaintext listener
-// defaults to loopback-only (127.0.0.1:8085) instead of all interfaces.
+// resolveListenAddr decides the plaintext HTTP listen address. A non-empty
+// address the caller set explicitly via AUTH_BRIDGE_LISTEN is always
+// honored, even if TLS is configured; an explicitly-empty value is treated
+// as unset rather than passed through, since an empty http.Server.Addr
+// defaults to :http (port 80, all interfaces) — the opposite of intent.
+// Once TLS is configured and no address was supplied, the plaintext
+// listener defaults to loopback-only (127.0.0.1:8085) instead of all
+// interfaces.
 func resolveListenAddr(explicit string, explicitlySet, tlsConfigured bool) string {
 	if explicitlySet && explicit != "" {
 		return explicit
