@@ -174,7 +174,7 @@ func validateTLSFiles(cert, key string) error {
 // is configured. Otherwise, once TLS is configured, the plaintext listener
 // defaults to loopback-only (127.0.0.1:8085) instead of all interfaces.
 func resolveListenAddr(explicit string, explicitlySet, tlsConfigured bool) string {
-	if explicitlySet {
+	if explicitlySet && explicit != "" {
 		return explicit
 	}
 	if tlsConfigured {

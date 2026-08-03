@@ -138,6 +138,10 @@ func TestResolveListenAddr(t *testing.T) {
 			name:     "tls configured, explicit loopback value honored",
 			explicit: "127.0.0.1:9000", explicitlySet: true, tlsConfigured: true, want: "127.0.0.1:9000",
 		},
+		{
+			name:     "tls configured, explicitly-set empty value treated as unset",
+			explicit: "", explicitlySet: true, tlsConfigured: true, want: "127.0.0.1:8085",
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := resolveListenAddr(tt.explicit, tt.explicitlySet, tt.tlsConfigured)
