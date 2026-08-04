@@ -444,6 +444,11 @@ func (r *OpenShellGatewayReconciler) reconcileClusterRole(ctx context.Context, g
 			// identities, since the users/~ self-lookup API never returns their
 			// custom Group memberships (see checkGroupMemberships in authbridge/openshift.go).
 			{APIGroups: []string{"user.openshift.io"}, Resources: []string{"groups"}, Verbs: []string{"get"}},
+			// auth-bridge fetches the live ServiceAccount object directly for
+			// ServiceAccount identities, since the users/~ self-lookup API always
+			// returns an empty uid for them (see serviceAccountUID in
+			// authbridge/openshift.go) — needed for a real, stable JWT sub claim.
+			{APIGroups: []string{""}, Resources: []string{"serviceaccounts"}, Verbs: []string{"get"}},
 		}
 		return nil
 	})

@@ -163,23 +163,92 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, g
 		Groups: raw.Groups,
 	}
 
-	if strings.HasPrefix(info.Name, "system:serviceaccount:") && len(groupNames) > 0 {
-		extraGroups, err := c.checkGroupMemberships(ctx, info.Name, groupNames)
-		if err != nil {
-			return nil, fmt.Errorf("group CR lookup for %q: %w", info.Name, err)
-		}
-		seen := make(map[string]bool, len(info.Groups))
-		for _, g := range info.Groups {
-			seen[g] = true
-		}
-		for _, g := range extraGroups {
-			if !seen[g] {
-				info.Groups = append(info.Groups, g)
+	if strings.HasPrefix(info.Name, "system:serviceaccount:") {
+		if len(groupNames) > 0 {
+			extraGroups, err := c.checkGroupMemberships(ctx, info.Name, groupNames)
+			if err != nil {
+				return nil, fmt.Errorf("group CR lookup for %q: %w", info.Name, err)
 			}
+			seen := make(map[string]bool, len(info.Groups))
+			for _, g := range info.Groups {
+				seen[g] = true
+			}
+			for _, g := range extraGroups {
+				if !seen[g] {
+					info.Groups = append(info.Groups, g)
+				}
+			}
+		}
+
+		// The users/~ self-lookup returns an empty uid for a ServiceAccount-shaped
+		// virtual User object (there's no backing User resource with a real UID).
+		// Fetch the actual ServiceAccount's UID directly so callers get a real,
+		// stable subject to mint tokens and reconcile authorization against,
+		// instead of silently minting a token with an empty sub claim.
+		if info.UID == "" {
+			uid, err := c.serviceAccountUID(ctx, info.Name)
+			if err != nil {
+				return nil, fmt.Errorf("resolving ServiceAccount UID for %q: %w", info.Name, err)
+			}
+			info.UID = uid
 		}
 	}
 
 	return info, nil
+}
+
+// serviceAccountUID fetches the live UID of the ServiceAccount identified by
+// subject (a "system:serviceaccount:<namespace>:<name>" string) directly from
+// the Kubernetes API, using the bridge's own SA token.
+func (c *OpenShiftClient) serviceAccountUID(ctx context.Context, subject string) (string, error) {
+	parts := strings.SplitN(strings.TrimPrefix(subject, "system:serviceaccount:"), ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", fmt.Errorf("malformed ServiceAccount subject %q", subject)
+	}
+	namespace, name := parts[0], parts[1]
+
+	rawToken, err := os.ReadFile(c.SATokenPath)
+	if err != nil {
+		return "", fmt.Errorf("reading service account token failed")
+	}
+	saToken := strings.TrimSpace(string(rawToken))
+	if saToken == "" {
+		return "", fmt.Errorf("service account token file is empty")
+	}
+
+	apiURL := fmt.Sprintf("%s/api/v1/namespaces/%s/serviceaccounts/%s",
+		c.kubeAPIURL(), url.PathEscape(namespace), url.PathEscape(name))
+	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Authorization", "Bearer "+saToken)
+
+	resp, err := c.saHTTPClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("ServiceAccount lookup: %w", err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("ServiceAccount lookup for %s/%s failed with status %d", namespace, name, resp.StatusCode)
+	}
+
+	var raw struct {
+		Metadata struct {
+			UID string `json:"uid"`
+		} `json:"metadata"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&raw); err != nil {
+		return "", fmt.Errorf("decoding ServiceAccount %s/%s: %w", namespace, name, err)
+	}
+	if raw.Metadata.UID == "" {
+		return "", fmt.Errorf("ServiceAccount %s/%s has no uid", namespace, name)
+	}
+	return raw.Metadata.UID, nil
 }
 
 // checkGroupMemberships queries OpenShift Group CRs using the bridge's own SA token
