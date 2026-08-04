@@ -182,11 +182,13 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, g
 
 		// The users/~ self-lookup returns an empty uid for a ServiceAccount-shaped
 		// virtual User object (there's no backing User resource with a real UID).
-		// Fetch the actual ServiceAccount's UID directly so callers get a real,
-		// stable subject to mint tokens and reconcile authorization against,
-		// instead of silently minting a token with an empty sub claim.
+		// Resolve the real, stable uid bound into the token itself via TokenReview
+		// instead, so callers get a real subject to mint tokens and reconcile
+		// authorization against, rather than silently minting an empty sub claim.
+		// This reuses the tokenreviews:create permission the bridge already holds
+		// for its own token validation, needing no additional RBAC grant.
 		if info.UID == "" {
-			uid, err := c.serviceAccountUID(ctx, info.Name)
+			uid, err := c.tokenReviewUID(ctx, accessToken)
 			if err != nil {
 				return nil, fmt.Errorf("resolving ServiceAccount UID for %q: %w", info.Name, err)
 			}
@@ -197,58 +199,68 @@ func (c *OpenShiftClient) GetUserInfo(ctx context.Context, accessToken string, g
 	return info, nil
 }
 
-// serviceAccountUID fetches the live UID of the ServiceAccount identified by
-// subject (a "system:serviceaccount:<namespace>:<name>" string) directly from
-// the Kubernetes API, using the bridge's own SA token.
-func (c *OpenShiftClient) serviceAccountUID(ctx context.Context, subject string) (string, error) {
-	parts := strings.SplitN(strings.TrimPrefix(subject, "system:serviceaccount:"), ":", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
-		return "", fmt.Errorf("malformed ServiceAccount subject %q", subject)
-	}
-	namespace, name := parts[0], parts[1]
-
-	rawToken, err := os.ReadFile(c.SATokenPath)
+// tokenReviewUID resolves the real, stable uid bound into token by submitting
+// it to the Kubernetes TokenReview API, authenticating as the bridge's own
+// ServiceAccount. Unlike the OpenShift users/~ self-lookup, TokenReview
+// returns the uid embedded in a bound ServiceAccount token's own claims.
+func (c *OpenShiftClient) tokenReviewUID(ctx context.Context, token string) (string, error) {
+	rawSAToken, err := os.ReadFile(c.SATokenPath)
 	if err != nil {
 		return "", fmt.Errorf("reading service account token failed")
 	}
-	saToken := strings.TrimSpace(string(rawToken))
+	saToken := strings.TrimSpace(string(rawSAToken))
 	if saToken == "" {
 		return "", fmt.Errorf("service account token file is empty")
 	}
 
-	apiURL := fmt.Sprintf("%s/api/v1/namespaces/%s/serviceaccounts/%s",
-		c.kubeAPIURL(), url.PathEscape(namespace), url.PathEscape(name))
-	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+	reqBody, err := json.Marshal(map[string]interface{}{
+		"apiVersion": "authentication.k8s.io/v1",
+		"kind":       "TokenReview",
+		"spec":       map[string]string{"token": token},
+	})
+	if err != nil {
+		return "", err
+	}
+
+	apiURL := c.kubeAPIURL() + "/apis/authentication.k8s.io/v1/tokenreviews"
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(string(reqBody)))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+saToken)
+	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.saHTTPClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("ServiceAccount lookup: %w", err)
+		return "", fmt.Errorf("TokenReview request: %w", err)
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<10))
 		_ = resp.Body.Close()
 	}()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("ServiceAccount lookup for %s/%s failed with status %d", namespace, name, resp.StatusCode)
+	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("TokenReview failed with status %d", resp.StatusCode)
 	}
 
 	var raw struct {
-		Metadata struct {
-			UID string `json:"uid"`
-		} `json:"metadata"`
+		Status struct {
+			Authenticated bool `json:"authenticated"`
+			User          struct {
+				UID string `json:"uid"`
+			} `json:"user"`
+		} `json:"status"`
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&raw); err != nil {
-		return "", fmt.Errorf("decoding ServiceAccount %s/%s: %w", namespace, name, err)
+		return "", fmt.Errorf("decoding TokenReview response: %w", err)
 	}
-	if raw.Metadata.UID == "" {
-		return "", fmt.Errorf("ServiceAccount %s/%s has no uid", namespace, name)
+	if !raw.Status.Authenticated {
+		return "", fmt.Errorf("TokenReview: token did not authenticate")
 	}
-	return raw.Metadata.UID, nil
+	if raw.Status.User.UID == "" {
+		return "", fmt.Errorf("TokenReview: response has no user uid")
+	}
+	return raw.Status.User.UID, nil
 }
 
 // checkGroupMemberships queries OpenShift Group CRs using the bridge's own SA token

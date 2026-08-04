@@ -479,13 +479,13 @@ func TestTokenExchangeServiceAccountEmptyUIDResolvesRealUID(t *testing.T) {
 		case "/apis/user.openshift.io/v1/groups/openshell-users":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-users"},"users":["system:serviceaccount:mynamespace:mysa"]}`))
-		case "/api/v1/namespaces/mynamespace/serviceaccounts/mysa":
+		case "/apis/authentication.k8s.io/v1/tokenreviews":
 			if r.Header.Get("Authorization") != "Bearer bridge-sa-token" {
-				http.Error(w, "forbidden: wrong token for SA lookup", http.StatusForbidden)
+				http.Error(w, "forbidden: wrong token for TokenReview", http.StatusForbidden)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"metadata":{"name":"mysa","namespace":"mynamespace","uid":"real-sa-uid-123"}}`))
+			_, _ = w.Write([]byte(`{"status":{"authenticated":true,"user":{"username":"system:serviceaccount:mynamespace:mysa","uid":"real-sa-uid-123"}}}`))
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
