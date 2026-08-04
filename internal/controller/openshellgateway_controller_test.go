@@ -92,6 +92,19 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		}
 	}
 
+	setupExternalServerCertGateway := func(secretName string) (*OpenShellGatewayReconciler, *ogov1alpha1.OpenShellGateway) {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		gw.Spec.Auth.OpenShift.Enabled = ptr.To(true)
+		gw.Spec.TLS.ServerCertSecretName = secretName
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+		return r, gw
+	}
+
 	It("should add a finalizer on first reconcile", func() {
 		r := reconciler()
 		result, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
@@ -321,6 +334,48 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		Expect(r.reconcileAuthBridgeCA(ctx, gw)).To(Succeed())
 		Expect(errors.IsNotFound(k8sClient.Get(ctx,
 			types.NamespacedName{Name: gwName + "-auth-ca", Namespace: "ogo-test"}, &corev1.ConfigMap{}))).To(BeTrue())
+	})
+
+	It("should require an explicit ca.crt for an external server certificate secret", func() {
+		r, gw := setupExternalServerCertGateway("external-tls-no-ca")
+
+		externalSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "external-tls-no-ca", Namespace: "ogo-test"},
+			Type:       corev1.SecretTypeTLS,
+			Data:       map[string][]byte{"tls.crt": []byte("leaf-cert-data"), "tls.key": []byte("leaf-key-data")},
+		}
+		Expect(k8sClient.Create(ctx, externalSecret)).To(Succeed())
+
+		_, err := r.serverTLSCA(ctx, gw)
+		Expect(err).To(MatchError(ContainSubstring("ca.crt")))
+
+		Expect(r.reconcileAuthBridgeCA(ctx, gw)).To(HaveOccurred())
+		Expect(errors.IsNotFound(k8sClient.Get(ctx,
+			types.NamespacedName{Name: gwName + "-auth-ca", Namespace: "ogo-test"}, &corev1.ConfigMap{}))).To(BeTrue())
+	})
+
+	It("should publish the external secret's ca.crt, not its rotating leaf certificate", func() {
+		r, gw := setupExternalServerCertGateway("external-tls-with-ca")
+
+		externalSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "external-tls-with-ca", Namespace: "ogo-test"},
+			Type:       corev1.SecretTypeTLS,
+			Data: map[string][]byte{
+				"tls.crt": []byte("leaf-cert-data"),
+				"tls.key": []byte("leaf-key-data"),
+				"ca.crt":  []byte("external-ca-data"),
+			},
+		}
+		Expect(k8sClient.Create(ctx, externalSecret)).To(Succeed())
+
+		ca, err := r.serverTLSCA(ctx, gw)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(ca)).To(Equal("external-ca-data"))
+
+		Expect(r.reconcileAuthBridgeCA(ctx, gw)).To(Succeed())
+		configMap := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-auth-ca", Namespace: "ogo-test"}, configMap)).To(Succeed())
+		Expect(configMap.Data["ca.crt"]).To(Equal("external-ca-data"))
 	})
 
 	It("should set status URL from route hostname", func() {

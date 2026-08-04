@@ -610,7 +610,8 @@ func (r *OpenShellGatewayReconciler) reconcileAuthBridgeCA(ctx context.Context, 
 
 func (r *OpenShellGatewayReconciler) serverTLSCA(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) ([]byte, error) {
 	secretName := gw.Name + "-server-tls"
-	if gw.Spec.TLS.ServerCertSecretName != "" {
+	external := gw.Spec.TLS.ServerCertSecretName != ""
+	if external {
 		secretName = gw.Spec.TLS.ServerCertSecretName
 	}
 	secret := &corev1.Secret{}
@@ -619,6 +620,11 @@ func (r *OpenShellGatewayReconciler) serverTLSCA(ctx context.Context, gw *ogov1a
 	}
 	destinationCA := secret.Data["ca.crt"]
 	if len(destinationCA) == 0 {
+		if external {
+			return nil, fmt.Errorf("server TLS secret %q (spec.tls.serverCertSecretName) has no ca.crt; "+
+				"external server certificates must include the issuing CA under the ca.crt key — "+
+				"a rotating leaf tls.crt certificate cannot be published as stable trust material", secretName)
+		}
 		destinationCA = secret.Data[corev1.TLSCertKey]
 	}
 	if len(destinationCA) == 0 {
