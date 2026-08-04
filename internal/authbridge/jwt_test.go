@@ -18,10 +18,13 @@ package authbridge
 
 import (
 	"crypto"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"math/big"
 	"strings"
 	"testing"
@@ -39,6 +42,63 @@ func TestNewJWTSigner(t *testing.T) {
 	if signer.privateKey == nil {
 		t.Error("privateKey should not be nil")
 	}
+}
+
+func TestNewJWTSignerFromPEM(t *testing.T) {
+	signingPEM := generateSigningPEM(t)
+
+	t.Run("derives kid when empty", func(t *testing.T) {
+		signer, err := NewJWTSignerFromPEM(signingPEM, "")
+		if err != nil {
+			t.Fatalf("NewJWTSignerFromPEM() error: %v", err)
+		}
+		if signer.kid == "" {
+			t.Error("kid should have been derived from the public key")
+		}
+	})
+
+	t.Run("honors an explicit kid", func(t *testing.T) {
+		signer, err := NewJWTSignerFromPEM(signingPEM, "explicit-kid")
+		if err != nil {
+			t.Fatalf("NewJWTSignerFromPEM() error: %v", err)
+		}
+		if signer.kid != "explicit-kid" {
+			t.Errorf("kid = %q, want %q", signer.kid, "explicit-kid")
+		}
+	})
+
+	t.Run("rejects malformed PEM", func(t *testing.T) {
+		if _, err := NewJWTSignerFromPEM([]byte("not a pem"), ""); err == nil {
+			t.Error("expected an error for malformed PEM, got nil")
+		}
+	})
+
+	t.Run("mints a usable token", func(t *testing.T) {
+		signer, err := NewJWTSignerFromPEM(signingPEM, "")
+		if err != nil {
+			t.Fatalf("NewJWTSignerFromPEM() error: %v", err)
+		}
+		jwt, err := signer.MintToken("http://localhost:8085", "openshell-cli", "sub", "user", "", []string{"openshell-admin"}, time.Minute)
+		if err != nil {
+			t.Fatalf("MintToken() error: %v", err)
+		}
+		if parts := strings.Split(jwt, "."); len(parts) != 3 {
+			t.Errorf("minted token is not a 3-part JWT: %q", jwt)
+		}
+	})
+}
+
+func generateSigningPEM(t *testing.T) []byte {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generating RSA key: %v", err)
+	}
+	privBytes, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshaling private key: %v", err)
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
 }
 
 func TestMintToken(t *testing.T) {
