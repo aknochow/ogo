@@ -62,6 +62,9 @@ const (
 	// adminTokenTTL is short-lived on purpose: minted fresh per reconcile,
 	// never persisted, used for a single gRPC call.
 	adminTokenTTL = 60 * time.Second
+
+	// gatewayGRPCPort is the gateway's in-cluster gRPC listener port.
+	gatewayGRPCPort = 8080
 )
 
 // errMembershipRemoved signals that addMember's role-change path removed the
@@ -72,7 +75,11 @@ const (
 // a stale "last known good" subject that no longer holds any membership.
 var errMembershipRemoved = errors.New("workspace membership removed but re-add failed")
 
-// OpenShellWorkspaceMemberReconciler reconciles an OpenShellWorkspaceMember object.
+// OpenShellWorkspaceMemberReconciler reconciles OpenShellWorkspaceMember
+// objects by managing workspace membership in the OpenShell gateway via its
+// gRPC API. It mints short-lived admin JWTs to authenticate, tracks the
+// ServiceAccount UID in status to detect identity recreation, and uses a
+// finalizer to clean up remote membership on CR deletion.
 type OpenShellWorkspaceMemberReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -381,7 +388,7 @@ func (r *OpenShellWorkspaceMemberReconciler) dialConnectClient(ctx context.Conte
 		return nil, nil, fmt.Errorf("resolving gRPC credentials: %w", err)
 	}
 
-	target := fmt.Sprintf("%s.%s.svc.cluster.local:8080", gw.Name, gatewayNamespace(gw))
+	target := fmt.Sprintf("%s.%s.svc.cluster.local:%d", gw.Name, gatewayNamespace(gw), gatewayGRPCPort)
 	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, nil, fmt.Errorf("dialing gateway gRPC endpoint %s: %w", target, err)
@@ -418,6 +425,7 @@ func (r *OpenShellWorkspaceMemberReconciler) mintAdminToken(ctx context.Context,
 func (r *OpenShellWorkspaceMemberReconciler) dialCredentials(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (credentials.TransportCredentials, error) {
 	tlsEnabled := gw.Spec.TLS.Enabled != nil && *gw.Spec.TLS.Enabled
 	if !tlsEnabled {
+		logf.FromContext(ctx).Info("dialing OpenShell gateway gRPC endpoint over plaintext; the openshell-admin JWT minted for this call will be transmitted in cleartext on the pod network -- set spec.tls.enabled to encrypt this channel")
 		return insecure.NewCredentials(), nil
 	}
 
