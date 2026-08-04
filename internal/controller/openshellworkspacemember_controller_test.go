@@ -55,6 +55,13 @@ type fakeOpenShellServer struct {
 	// failRemoveSubject, when set, makes RemoveWorkspaceMember fail for that
 	// exact subject only -- used to simulate a transient remote failure.
 	failRemoveSubject string
+
+	// failAddSubject, when set, makes AddWorkspaceMember fail for that exact
+	// subject only when it is not already a member -- i.e. it only affects a
+	// genuine add/re-add, never the AlreadyExists path an existing member
+	// hits. Used to simulate the re-add half of a role change failing after
+	// the old-role membership has already been removed.
+	failAddSubject string
 }
 
 func newFakeOpenShellServer() *fakeOpenShellServer {
@@ -65,6 +72,12 @@ func (f *fakeOpenShellServer) setFailRemoveSubject(subject string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.failRemoveSubject = subject
+}
+
+func (f *fakeOpenShellServer) setFailAddSubject(subject string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failAddSubject = subject
 }
 
 // AddWorkspaceMember matches the real gateway's actual behavior (confirmed
@@ -79,6 +92,9 @@ func (f *fakeOpenShellServer) AddWorkspaceMember(_ context.Context, req *openshe
 	}
 	if _, exists := f.members[req.Workspace][req.PrincipalSubject]; exists {
 		return nil, grpcstatus.Error(codes.AlreadyExists, "member already exists in this workspace")
+	}
+	if f.failAddSubject != "" && req.PrincipalSubject == f.failAddSubject {
+		return nil, grpcstatus.Error(codes.Unavailable, "simulated remote failure")
 	}
 	f.members[req.Workspace][req.PrincipalSubject] = req.Role
 	return &openshellclient.AddWorkspaceMemberResponse{Member: &openshellclient.WorkspaceMember{
@@ -322,6 +338,70 @@ var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 		role, ok := fakeServer.roleOf(string(sa.UID))
 		Expect(ok).To(BeTrue())
 		Expect(role).To(Equal(openshellclient.WorkspaceRole_WORKSPACE_ROLE_ADMIN))
+	})
+
+	It("clears ReconciledSubject when a role-change re-add fails after the old membership was removed", func() {
+		// Regression test: addMember's role-change path first removes the
+		// old-role membership, then re-adds with the new role. If that
+		// re-add fails, the subject is left with no membership at all --
+		// status must not go on claiming currentSubject is reconciled.
+		sa := createServiceAccount("wsmember-sa-8")
+		uid := string(sa.UID)
+
+		wm := &ogov1alpha1.OpenShellWorkspaceMember{
+			ObjectMeta: metav1.ObjectMeta{Name: "wm-8", Namespace: wsNamespace},
+			Spec: ogov1alpha1.OpenShellWorkspaceMemberSpec{
+				Workspace:         wsWorkspace,
+				ServiceAccountRef: ogov1alpha1.ServiceAccountReference{Name: sa.Name},
+				Role:              "user",
+			},
+		}
+		Expect(k8sClient.Create(ctx, wm)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, wm) }()
+
+		r := reconciler()
+		key := types.NamespacedName{Name: wm.Name, Namespace: wsNamespace}
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: key}) // adds finalizer
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		role, ok := fakeServer.roleOf(uid)
+		Expect(ok).To(BeTrue())
+		Expect(role).To(Equal(openshellclient.WorkspaceRole_WORKSPACE_ROLE_USER))
+
+		// Change the role and make the re-add half of the remove+re-add
+		// sequence fail, simulating a transient error between the two calls.
+		Expect(k8sClient.Get(ctx, key, wm)).To(Succeed())
+		wm.Spec.Role = "admin"
+		Expect(k8sClient.Update(ctx, wm)).To(Succeed())
+		fakeServer.setFailAddSubject(uid)
+
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, stillPresent := fakeServer.roleOf(uid)
+		Expect(stillPresent).To(BeFalse(), "the old-role membership was removed and the re-add failed, so no membership should remain")
+
+		Expect(k8sClient.Get(ctx, key, wm)).To(Succeed())
+		Expect(wm.Status.Phase).To(Equal("Failed"))
+		Expect(wm.Status.ReconciledSubject).To(BeEmpty(), "status must not claim a subject that no longer holds any workspace membership")
+		ready := findReadyCondition(wm.Status.Conditions)
+		Expect(ready).NotTo(BeNil())
+		Expect(ready.Reason).To(Equal("GatewayUnreachable"))
+
+		// Clear the injected failure -- the next reconcile should self-heal
+		// and re-add cleanly with the new role.
+		fakeServer.setFailAddSubject("")
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		role, ok = fakeServer.roleOf(uid)
+		Expect(ok).To(BeTrue())
+		Expect(role).To(Equal(openshellclient.WorkspaceRole_WORKSPACE_ROLE_ADMIN))
+
+		Expect(k8sClient.Get(ctx, key, wm)).To(Succeed())
+		Expect(wm.Status.Phase).To(Equal("Synced"))
+		Expect(wm.Status.ReconciledSubject).To(Equal(uid))
 	})
 
 	It("removes stale membership and adds new membership when the ServiceAccount is recreated", func() {

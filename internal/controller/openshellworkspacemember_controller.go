@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"time"
 
@@ -62,6 +63,14 @@ const (
 	// never persisted, used for a single gRPC call.
 	adminTokenTTL = 60 * time.Second
 )
+
+// errMembershipRemoved signals that addMember's role-change path removed the
+// old-role membership but the subsequent re-add failed, leaving the subject
+// with no workspace membership at all. reconcileSync checks for this via
+// errors.Is to clear status.ReconciledSubject, so the next reconcile treats
+// the subject as unreconciled and re-adds from scratch instead of reporting
+// a stale "last known good" subject that no longer holds any membership.
+var errMembershipRemoved = errors.New("workspace membership removed but re-add failed")
 
 // OpenShellWorkspaceMemberReconciler reconciles an OpenShellWorkspaceMember object.
 type OpenShellWorkspaceMemberReconciler struct {
@@ -163,6 +172,12 @@ func (r *OpenShellWorkspaceMemberReconciler) reconcileSync(ctx context.Context, 
 
 	role := workspaceRoleFromSpec(wm.Spec.Role)
 	if err := r.addMember(ctx, gw, wm.Spec.Workspace, currentSubject, role); err != nil {
+		if errors.Is(err, errMembershipRemoved) {
+			// The subject's old-role membership is already gone remotely --
+			// don't let status keep claiming currentSubject is reconciled
+			// when it currently holds no membership at all.
+			wm.Status.ReconciledSubject = ""
+		}
 		return r.setNotReady(ctx, wm, "GatewayUnreachable", err)
 	}
 
@@ -298,7 +313,7 @@ func (r *OpenShellWorkspaceMemberReconciler) addMember(ctx context.Context, gw *
 	if _, err := wsClient.AddWorkspaceMember(rpcCtx, &openshellclient.AddWorkspaceMemberRequest{
 		Workspace: workspace, PrincipalSubject: subject, Role: role,
 	}); err != nil {
-		return fmt.Errorf("AddWorkspaceMember (role change): %w", err)
+		return fmt.Errorf("%w: AddWorkspaceMember (role change): %w", errMembershipRemoved, err)
 	}
 	return nil
 }
