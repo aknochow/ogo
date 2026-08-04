@@ -65,6 +65,21 @@ const (
 type OpenShellWorkspaceMemberReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// connectClient constructs a client for the gateway's workspace-membership
+	// gRPC API and a func to release it. Defaults to dialConnectClient (a real
+	// in-cluster dial); tests override it to point at an in-process fake
+	// server without needing a real gateway or network.
+	connectClient func(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (openshellclient.OpenShellClient, func(), error)
+}
+
+// connect returns the reconciler's connectClient, defaulting to a real
+// in-cluster gRPC dial when unset (the zero value, i.e. outside of tests).
+func (r *OpenShellWorkspaceMemberReconciler) connect(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (openshellclient.OpenShellClient, func(), error) {
+	if r.connectClient != nil {
+		return r.connectClient(ctx, gw)
+	}
+	return r.dialConnectClient(ctx, gw)
 }
 
 // +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellworkspacemembers,verbs=get;list;watch;create;update;patch;delete
@@ -205,11 +220,11 @@ func workspaceRoleFromSpec(role string) openshellclient.WorkspaceRole {
 }
 
 func (r *OpenShellWorkspaceMemberReconciler) addMember(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, workspace, subject string, role openshellclient.WorkspaceRole) error {
-	rpcCtx, wsClient, conn, err := r.dialWorkspaceClient(ctx, gw)
+	rpcCtx, wsClient, closeFn, err := r.workspaceClient(ctx, gw)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
+	defer closeFn()
 
 	_, err = wsClient.AddWorkspaceMember(rpcCtx, &openshellclient.AddWorkspaceMemberRequest{
 		Workspace:        workspace,
@@ -223,11 +238,11 @@ func (r *OpenShellWorkspaceMemberReconciler) addMember(ctx context.Context, gw *
 }
 
 func (r *OpenShellWorkspaceMemberReconciler) removeMember(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, workspace, subject string) error {
-	rpcCtx, wsClient, conn, err := r.dialWorkspaceClient(ctx, gw)
+	rpcCtx, wsClient, closeFn, err := r.workspaceClient(ctx, gw)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
+	defer closeFn()
 
 	_, err = wsClient.RemoveWorkspaceMember(rpcCtx, &openshellclient.RemoveWorkspaceMemberRequest{
 		Workspace:        workspace,
@@ -239,29 +254,42 @@ func (r *OpenShellWorkspaceMemberReconciler) removeMember(ctx context.Context, g
 	return nil
 }
 
-// dialWorkspaceClient mints a short-lived admin JWT using the same RSA key
-// auth-bridge signs with, dials the gateway's in-cluster gRPC endpoint, and
-// returns a context carrying the token as Bearer auth metadata. The caller
-// owns the returned connection and must Close it.
-func (r *OpenShellWorkspaceMemberReconciler) dialWorkspaceClient(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (context.Context, openshellclient.OpenShellClient, *grpc.ClientConn, error) {
+// workspaceClient mints a short-lived admin JWT using the same RSA key
+// auth-bridge signs with, connects to the gateway's workspace-membership API
+// (a real in-cluster gRPC dial by default, or a test double via
+// connectClient), and returns a context carrying the token as Bearer auth
+// metadata. The caller must call the returned func to release the connection.
+func (r *OpenShellWorkspaceMemberReconciler) workspaceClient(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (context.Context, openshellclient.OpenShellClient, func(), error) {
 	token, err := r.mintAdminToken(ctx, gw)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("minting admin token: %w", err)
 	}
 
+	wsClient, closeFn, err := r.connect(ctx, gw)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	rpcCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	return rpcCtx, wsClient, closeFn, nil
+}
+
+// dialConnectClient is the real, default connectClient implementation: dials
+// the gateway's in-cluster gRPC endpoint, plaintext or mTLS matching the
+// gateway's own listener configuration.
+func (r *OpenShellWorkspaceMemberReconciler) dialConnectClient(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (openshellclient.OpenShellClient, func(), error) {
 	creds, err := r.dialCredentials(ctx, gw)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("resolving gRPC credentials: %w", err)
+		return nil, nil, fmt.Errorf("resolving gRPC credentials: %w", err)
 	}
 
 	target := fmt.Sprintf("%s.%s.svc.cluster.local:8080", gw.Name, gatewayNamespace(gw))
 	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(creds))
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("dialing gateway gRPC endpoint %s: %w", target, err)
+		return nil, nil, fmt.Errorf("dialing gateway gRPC endpoint %s: %w", target, err)
 	}
 
-	rpcCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
-	return rpcCtx, openshellclient.NewOpenShellClient(conn), conn, nil
+	return openshellclient.NewOpenShellClient(conn), func() { _ = conn.Close() }, nil
 }
 
 func (r *OpenShellWorkspaceMemberReconciler) mintAdminToken(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (string, error) {
