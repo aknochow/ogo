@@ -272,7 +272,16 @@ jobs:
           body: |
             ${{ steps.changelog.outputs.content }}
             ${{ steps.deps.outputs.deps }}
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # Only a real release-candidate tag (vX.Y.Z-rcN) is a GitHub
+          # pre-release. A dependency-only bump tag (vX.Y.Z-N, see
+          # AGENTS.md's tag strategy) contains a hyphen too, but it's
+          # stable, deployable content that ships AFTER and supersedes
+          # vX.Y.Z - flagging it prerelease made GitHub keep the older
+          # vX.Y.Z as "Latest" per SemVer precedence rules (a pre-release
+          # sorts BEFORE its base version), the opposite of intent. Found
+          # live 2026-08-04 when v0.2.4-1 published but v0.2.4 stayed
+          # "Latest".
+          prerelease: ${{ contains(github.ref_name, '-rc') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
