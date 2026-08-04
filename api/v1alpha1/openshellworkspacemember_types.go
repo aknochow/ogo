@@ -20,15 +20,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ServiceAccountReference identifies a workload identity by ServiceAccount name and namespace.
+// ServiceAccountReference identifies a workload identity by ServiceAccount
+// name, always within the OpenShellWorkspaceMember's own namespace. There is
+// deliberately no cross-namespace override: this is a namespaced CRD, and
+// allowing it to reference a ServiceAccount in a different namespace would
+// let anyone with create access to this resource in namespace A grant
+// workspace membership to an identity in namespace B, bypassing that
+// namespace's own RBAC boundary entirely.
 type ServiceAccountReference struct {
-	// Name of the ServiceAccount.
+	// Name of the ServiceAccount, in the same namespace as this resource.
 	// +kubebuilder:validation:MinLength=1
 	Name string `json:"name"`
-
-	// Namespace of the ServiceAccount. Defaults to the OpenShellWorkspaceMember's own namespace.
-	// +optional
-	Namespace string `json:"namespace,omitempty"`
 }
 
 // OpenShellWorkspaceMemberSpec defines the intended OpenShell workspace membership for a workload identity.

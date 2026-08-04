@@ -69,12 +69,9 @@ spec:
                   reconcile membership for.
                 properties:
                   name:
-                    description: Name of the ServiceAccount.
+                    description: Name of the ServiceAccount, in the same namespace
+                      as this resource.
                     minLength: 1
-                    type: string
-                  namespace:
-                    description: Namespace of the ServiceAccount. Defaults to the
-                      OpenShellWorkspaceMember's own namespace.
                     type: string
                 required:
                 - name

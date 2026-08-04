@@ -117,12 +117,11 @@ func (r *OpenShellWorkspaceMemberReconciler) reconcileSync(ctx context.Context, 
 		return r.setNotReady(ctx, wm, "GatewayNotFound", err)
 	}
 
-	saNamespace := wm.Spec.ServiceAccountRef.Namespace
-	if saNamespace == "" {
-		saNamespace = wm.Namespace
-	}
+	// The referenced ServiceAccount is always looked up in this CR's own
+	// namespace -- deliberately no cross-namespace override, see
+	// ServiceAccountReference's doc comment.
 	sa := &corev1.ServiceAccount{}
-	err = r.Get(ctx, types.NamespacedName{Name: wm.Spec.ServiceAccountRef.Name, Namespace: saNamespace}, sa)
+	err = r.Get(ctx, types.NamespacedName{Name: wm.Spec.ServiceAccountRef.Name, Namespace: wm.Namespace}, sa)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return ctrl.Result{}, err
 	}
@@ -141,12 +140,12 @@ func (r *OpenShellWorkspaceMemberReconciler) reconcileSync(ctx context.Context, 
 			wm.Status.ReconciledSubject = ""
 		}
 		return r.setNotReady(ctx, wm, "IdentityNotFound",
-			fmt.Errorf("ServiceAccount %s/%s not found", saNamespace, wm.Spec.ServiceAccountRef.Name))
+			fmt.Errorf("ServiceAccount %s/%s not found", wm.Namespace, wm.Spec.ServiceAccountRef.Name))
 	}
 
 	if sa.UID == "" {
 		return r.setNotReady(ctx, wm, "IdentityNotFound",
-			fmt.Errorf("ServiceAccount %s/%s has no uid", saNamespace, wm.Spec.ServiceAccountRef.Name))
+			fmt.Errorf("ServiceAccount %s/%s has no uid", wm.Namespace, wm.Spec.ServiceAccountRef.Name))
 	}
 	currentSubject := string(sa.UID)
 	if wm.Status.ReconciledSubject != "" && wm.Status.ReconciledSubject != currentSubject {
