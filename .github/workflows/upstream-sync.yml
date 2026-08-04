@@ -193,15 +193,25 @@ jobs:
       - name: Compute and push dependency-bump tag
         if: steps.check.outputs.dependency_only == 'true'
         run: |
-          BASE=$(grep -oP 'VERSION \?= \K[\d.]+' Makefile)
-          if ! echo "${BASE}" | grep -qP '^\d+\.\d+\.\d+$'; then
-            echo "Makefile VERSION '${BASE}' is not bare semver (X.Y.Z) - refusing to use it in git ls-remote/tag"
-            exit 1
-          fi
+          # BASE must be the latest REAL release tag (bare vX.Y.Z, pushed
+          # manually per AGENTS.md's tag strategy), NOT Makefile's VERSION -
+          # that field is deliberately frozen at its original stub value
+          # ("VERSION in Makefile stays as base") and never reflects actual
+          # releases. Using it here silently anchored every dependency tag
+          # to v0.1.0 forever, regardless of how many real vX.Y.Z releases
+          # had since shipped - caught 2026-08-04 before merging a PR that
+          # would have produced v0.1.0-<huge number> right after v0.2.4.
+          #
           # Check existing tags via the remote, not local `git rev-parse` -
           # this job's checkout has no fetch-depth override for tags, but
           # relying on local refs at all is fragile; ls-remote is always
           # authoritative regardless of what this checkout happened to fetch.
+          BASE=$(git ls-remote --tags origin 'refs/tags/v*' \
+            | grep -oP 'refs/tags/v\K\d+\.\d+\.\d+$' | sort -V | tail -1)
+          if ! echo "${BASE}" | grep -qP '^\d+\.\d+\.\d+$'; then
+            echo "No real vX.Y.Z release tag found on origin - refusing to guess a base for the dependency-bump tag"
+            exit 1
+          fi
           ESCAPED_BASE=$(echo "${BASE}" | sed 's/\./\\./g')
           LAST=$(git ls-remote --tags origin "refs/tags/v${BASE}-*" \
             | grep -oP "v${ESCAPED_BASE}-\K\d+" | sort -n | tail -1)
