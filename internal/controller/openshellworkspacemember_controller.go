@@ -471,7 +471,7 @@ func (r *OpenShellWorkspaceMemberReconciler) dialCredentials(ctx context.Context
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      pool,
 		ServerName:   fmt.Sprintf("%s.%s.svc.cluster.local", gw.Name, gatewayNamespace(gw)),
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 	}), nil
 }
 
