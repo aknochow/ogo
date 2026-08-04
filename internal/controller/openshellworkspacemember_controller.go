@@ -89,8 +89,6 @@ func (r *OpenShellWorkspaceMemberReconciler) connect(ctx context.Context, gw *og
 // +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellworkspacemembers/finalizers,verbs=update
 
 func (r *OpenShellWorkspaceMemberReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
 	wm := &ogov1alpha1.OpenShellWorkspaceMember{}
 	if err := r.Get(ctx, req.NamespacedName, wm); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -107,6 +105,14 @@ func (r *OpenShellWorkspaceMemberReconciler) Reconcile(ctx context.Context, req 
 		}
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
+
+	return r.reconcileSync(ctx, wm)
+}
+
+// reconcileSync resolves the gateway and the target ServiceAccount, then
+// reconciles workspace membership to match spec.
+func (r *OpenShellWorkspaceMemberReconciler) reconcileSync(ctx context.Context, wm *ogov1alpha1.OpenShellWorkspaceMember) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
 
 	gw, err := r.resolveGateway(ctx)
 	if err != nil {
@@ -141,10 +147,13 @@ func (r *OpenShellWorkspaceMemberReconciler) Reconcile(ctx context.Context, req 
 		// The ServiceAccount was deleted and recreated (a new UID) since our
 		// last successful reconcile. Remove the stale membership first so a
 		// recreated identity never silently inherits the old one's access.
+		// Don't proceed to grant the new identity if this fails -- that
+		// would leave both the stale and new memberships active at once.
 		if err := r.removeMember(ctx, gw, wm.Spec.Workspace, wm.Status.ReconciledSubject); err != nil {
-			log.Error(err, "failed to remove stale membership for a recreated identity",
-				"oldSubject", wm.Status.ReconciledSubject, "newSubject", currentSubject)
+			return r.setNotReady(ctx, wm, "GatewayUnreachable",
+				fmt.Errorf("removing stale membership for recreated identity: %w", err))
 		}
+		wm.Status.ReconciledSubject = ""
 	}
 
 	role := workspaceRoleFromSpec(wm.Spec.Role)
@@ -159,6 +168,8 @@ func (r *OpenShellWorkspaceMemberReconciler) Reconcile(ctx context.Context, req 
 		Type: "Ready", Status: metav1.ConditionTrue, Reason: "Synced",
 		Message: fmt.Sprintf("%s is a %s member of workspace %q", wm.Spec.ServiceAccountRef.Name, wm.Spec.Role, wm.Spec.Workspace),
 	})
+	// requeueInterval is the shared periodic requeue cadence defined in
+	// openshellgateway_controller.go (this file's sibling in the same package).
 	return ctrl.Result{RequeueAfter: requeueInterval}, r.Status().Update(ctx, wm)
 }
 
@@ -172,8 +183,15 @@ func (r *OpenShellWorkspaceMemberReconciler) reconcileDelete(ctx context.Context
 	if wm.Status.ReconciledSubject != "" {
 		gw, err := r.resolveGateway(ctx)
 		if err != nil {
-			log.Error(err, "no gateway found during cleanup; removing finalizer without a remote cleanup call")
-		} else if err := r.removeMember(ctx, gw, wm.Spec.Workspace, wm.Status.ReconciledSubject); err != nil {
+			// Don't drop the finalizer here -- that would permanently orphan
+			// the remote membership if the gateway is only temporarily
+			// unreachable. Matches OpenShellGatewayReconciler's own
+			// reconcileDelete, which also retries indefinitely rather than
+			// giving up on external cleanup.
+			log.Error(err, "no gateway found during cleanup, will retry")
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		if err := r.removeMember(ctx, gw, wm.Spec.Workspace, wm.Status.ReconciledSubject); err != nil {
 			log.Error(err, "failed to remove workspace membership on delete, will retry")
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
@@ -183,11 +201,22 @@ func (r *OpenShellWorkspaceMemberReconciler) reconcileDelete(ctx context.Context
 	return ctrl.Result{}, r.Update(ctx, wm)
 }
 
+// setNotReady records a Ready=False condition and a Failed phase. For
+// GatewayUnreachable specifically, the underlying cause (which can include
+// details from reading/parsing the auth-bridge signing key Secret) is logged
+// server-side only; the CR's status -- visible to anyone with read access to
+// it -- gets a generic message instead.
 func (r *OpenShellWorkspaceMemberReconciler) setNotReady(ctx context.Context, wm *ogov1alpha1.OpenShellWorkspaceMember, reason string, cause error) (ctrl.Result, error) {
+	message := cause.Error()
+	if reason == "GatewayUnreachable" {
+		logf.FromContext(ctx).Error(cause, "gateway unreachable while reconciling workspace membership")
+		message = "failed to reach the OpenShell gateway; see operator logs for details"
+	}
 	meta.SetStatusCondition(&wm.Status.Conditions, metav1.Condition{
-		Type: "Ready", Status: metav1.ConditionFalse, Reason: reason, Message: cause.Error(),
+		Type: "Ready", Status: metav1.ConditionFalse, Reason: reason, Message: message,
 	})
 	wm.Status.Phase = "Failed"
+	wm.Status.ObservedGeneration = wm.Generation
 	if err := r.Status().Update(ctx, wm); err != nil {
 		return ctrl.Result{}, err
 	}

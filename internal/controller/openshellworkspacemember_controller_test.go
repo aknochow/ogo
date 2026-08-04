@@ -51,10 +51,20 @@ type fakeOpenShellServer struct {
 	mu      sync.Mutex
 	members map[string]map[string]openshellclient.WorkspaceRole // workspace -> subject -> role
 	calls   []string
+
+	// failRemoveSubject, when set, makes RemoveWorkspaceMember fail for that
+	// exact subject only -- used to simulate a transient remote failure.
+	failRemoveSubject string
 }
 
 func newFakeOpenShellServer() *fakeOpenShellServer {
 	return &fakeOpenShellServer{members: map[string]map[string]openshellclient.WorkspaceRole{}}
+}
+
+func (f *fakeOpenShellServer) setFailRemoveSubject(subject string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failRemoveSubject = subject
 }
 
 // AddWorkspaceMember matches the real gateway's actual behavior (confirmed
@@ -80,6 +90,9 @@ func (f *fakeOpenShellServer) RemoveWorkspaceMember(_ context.Context, req *open
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fmt.Sprintf("remove:%s:%s", req.Workspace, req.PrincipalSubject))
+	if f.failRemoveSubject != "" && req.PrincipalSubject == f.failRemoveSubject {
+		return nil, grpcstatus.Error(codes.Unavailable, "simulated remote failure")
+	}
 	removed := false
 	if members := f.members[req.Workspace]; members != nil {
 		if _, ok := members[req.PrincipalSubject]; ok {
@@ -243,7 +256,7 @@ var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 		Expect(k8sClient.Get(ctx, key, wm)).To(Succeed())
 		Expect(wm.Status.Phase).To(Equal("Synced"))
 		Expect(wm.Status.ReconciledSubject).To(Equal(string(sa.UID)))
-		ready := findCondition(wm.Status.Conditions, "Ready")
+		ready := findReadyCondition(wm.Status.Conditions)
 		Expect(ready).NotTo(BeNil())
 		Expect(ready.Status).To(Equal(metav1.ConditionTrue))
 	})
@@ -278,7 +291,7 @@ var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 
 		Expect(k8sClient.Get(ctx, key, wm)).To(Succeed())
 		Expect(wm.Status.Phase).To(Equal("Synced"))
-		ready := findCondition(wm.Status.Conditions, "Ready")
+		ready := findReadyCondition(wm.Status.Conditions)
 		Expect(ready).NotTo(BeNil())
 		Expect(ready.Status).To(Equal(metav1.ConditionTrue))
 
@@ -350,6 +363,79 @@ var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 		Expect(wm.Status.ReconciledSubject).To(Equal(newUID))
 	})
 
+	It("does not grant the new identity when removing stale membership fails", func() {
+		sa := createServiceAccount("wsmember-sa-6")
+		oldUID := string(sa.UID)
+
+		wm := &ogov1alpha1.OpenShellWorkspaceMember{
+			ObjectMeta: metav1.ObjectMeta{Name: "wm-6", Namespace: wsNamespace},
+			Spec: ogov1alpha1.OpenShellWorkspaceMemberSpec{
+				Workspace:         wsWorkspace,
+				ServiceAccountRef: ogov1alpha1.ServiceAccountReference{Name: sa.Name},
+			},
+		}
+		Expect(k8sClient.Create(ctx, wm)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, wm) }()
+
+		r := reconciler()
+		key := types.NamespacedName{Name: wm.Name, Namespace: wsNamespace}
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Delete(ctx, sa)).To(Succeed())
+		sa = createServiceAccount("wsmember-sa-6")
+		newUID := string(sa.UID)
+
+		fakeServer.setFailRemoveSubject(oldUID)
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		_, oldStillPresent := fakeServer.roleOf(oldUID)
+		Expect(oldStillPresent).To(BeTrue(), "old membership should be untouched since its removal failed")
+		_, newPresent := fakeServer.roleOf(newUID)
+		Expect(newPresent).To(BeFalse(), "the new identity must not be granted access while stale cleanup is unresolved")
+
+		Expect(k8sClient.Get(ctx, key, wm)).To(Succeed())
+		Expect(wm.Status.Phase).To(Equal("Failed"))
+		ready := findReadyCondition(wm.Status.Conditions)
+		Expect(ready).NotTo(BeNil())
+		Expect(ready.Reason).To(Equal("GatewayUnreachable"))
+	})
+
+	It("sanitizes the GatewayUnreachable condition message instead of leaking the underlying cause", func() {
+		sa := createServiceAccount("wsmember-sa-7")
+		wm := &ogov1alpha1.OpenShellWorkspaceMember{
+			ObjectMeta: metav1.ObjectMeta{Name: "wm-7", Namespace: wsNamespace},
+			Spec: ogov1alpha1.OpenShellWorkspaceMemberSpec{
+				Workspace:         wsWorkspace,
+				ServiceAccountRef: ogov1alpha1.ServiceAccountReference{Name: sa.Name},
+			},
+		}
+		Expect(k8sClient.Create(ctx, wm)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, wm) }()
+
+		// Remove the auth-bridge signing key Secret this BeforeEach created,
+		// so mintAdminToken fails with a detailed, Secret-referencing error.
+		Expect(k8sClient.Delete(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: wsGWName + "-auth-bridge-keys", Namespace: wsNamespace},
+		})).To(Succeed())
+
+		r := reconciler()
+		key := types.NamespacedName{Name: wm.Name, Namespace: wsNamespace}
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, key, wm)).To(Succeed())
+		ready := findReadyCondition(wm.Status.Conditions)
+		Expect(ready).NotTo(BeNil())
+		Expect(ready.Reason).To(Equal("GatewayUnreachable"))
+		Expect(ready.Message).NotTo(ContainSubstring("auth-bridge-keys"))
+		Expect(ready.Message).NotTo(ContainSubstring("Secret"))
+		Expect(ready.Message).To(Equal("failed to reach the OpenShell gateway; see operator logs for details"))
+	})
+
 	It("removes membership and reports IdentityNotFound when the ServiceAccount is deleted", func() {
 		sa := createServiceAccount("wsmember-sa-3")
 		uid := string(sa.UID)
@@ -382,7 +468,7 @@ var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 		Expect(k8sClient.Get(ctx, key, wm)).To(Succeed())
 		Expect(wm.Status.Phase).To(Equal("Failed"))
 		Expect(wm.Status.ReconciledSubject).To(BeEmpty())
-		ready := findCondition(wm.Status.Conditions, "Ready")
+		ready := findReadyCondition(wm.Status.Conditions)
 		Expect(ready).NotTo(BeNil())
 		Expect(ready.Status).To(Equal(metav1.ConditionFalse))
 		Expect(ready.Reason).To(Equal("IdentityNotFound"))
@@ -422,9 +508,9 @@ var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 	})
 })
 
-func findCondition(conditions []metav1.Condition, condType string) *metav1.Condition {
+func findReadyCondition(conditions []metav1.Condition) *metav1.Condition {
 	for i := range conditions {
-		if conditions[i].Type == condType {
+		if conditions[i].Type == "Ready" {
 			return &conditions[i]
 		}
 	}

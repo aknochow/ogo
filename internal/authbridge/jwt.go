@@ -83,6 +83,7 @@ func loadJWTSigner(signingKeyPath, kidPath string) (*JWTSigner, error) {
 // material from a Secret rather than a mounted file. If kid is empty, it's
 // derived from the public key's hash, matching loadJWTSigner's fallback.
 func NewJWTSignerFromPEM(signingPEM []byte, kid string) (*JWTSigner, error) {
+	kid = strings.TrimSpace(kid)
 	block, _ := pem.Decode(signingPEM)
 	if block == nil {
 		return nil, fmt.Errorf("no PEM block found in signing key")
