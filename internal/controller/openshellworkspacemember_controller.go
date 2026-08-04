@@ -24,9 +24,11 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -219,6 +221,14 @@ func workspaceRoleFromSpec(role string) openshellclient.WorkspaceRole {
 	return openshellclient.WorkspaceRole_WORKSPACE_ROLE_USER
 }
 
+// addMember reconciles subject's membership to exactly (workspace, role),
+// tolerating repeated reconciles of an already-correct membership.
+// AddWorkspaceMember itself is not idempotent -- the gateway rejects a
+// second call for the same (workspace, subject) with AlreadyExists, which a
+// controller reconcile loop will always eventually trigger. On AlreadyExists,
+// look up the existing role: if it already matches, this is a no-op; if the
+// CR's spec.role changed, remove and re-add to pick up the new role (there
+// is no UpdateWorkspaceMember RPC).
 func (r *OpenShellWorkspaceMemberReconciler) addMember(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, workspace, subject string, role openshellclient.WorkspaceRole) error {
 	rpcCtx, wsClient, closeFn, err := r.workspaceClient(ctx, gw)
 	if err != nil {
@@ -231,10 +241,49 @@ func (r *OpenShellWorkspaceMemberReconciler) addMember(ctx context.Context, gw *
 		PrincipalSubject: subject,
 		Role:             role,
 	})
-	if err != nil {
+	if err == nil {
+		return nil
+	}
+	if grpcstatus.Code(err) != codes.AlreadyExists {
 		return fmt.Errorf("AddWorkspaceMember: %w", err)
 	}
+
+	existingRole, err := findMemberRole(rpcCtx, wsClient, workspace, subject)
+	if err != nil {
+		return fmt.Errorf("looking up existing member after AlreadyExists: %w", err)
+	}
+	if existingRole == role {
+		return nil
+	}
+
+	if _, err := wsClient.RemoveWorkspaceMember(rpcCtx, &openshellclient.RemoveWorkspaceMemberRequest{
+		Workspace: workspace, PrincipalSubject: subject,
+	}); err != nil {
+		return fmt.Errorf("RemoveWorkspaceMember (role change): %w", err)
+	}
+	if _, err := wsClient.AddWorkspaceMember(rpcCtx, &openshellclient.AddWorkspaceMemberRequest{
+		Workspace: workspace, PrincipalSubject: subject, Role: role,
+	}); err != nil {
+		return fmt.Errorf("AddWorkspaceMember (role change): %w", err)
+	}
 	return nil
+}
+
+// findMemberRole scans ListWorkspaceMembers for subject's current role. The
+// RPC has no per-subject filter, so this fetches up to the gateway's own
+// per-workspace member cap (1000, see upstream's MAX_WORKSPACE_MEMBERS) and
+// searches client-side.
+func findMemberRole(ctx context.Context, wsClient openshellclient.OpenShellClient, workspace, subject string) (openshellclient.WorkspaceRole, error) {
+	resp, err := wsClient.ListWorkspaceMembers(ctx, &openshellclient.ListWorkspaceMembersRequest{Workspace: workspace, Limit: 1000})
+	if err != nil {
+		return openshellclient.WorkspaceRole_WORKSPACE_ROLE_UNSPECIFIED, fmt.Errorf("ListWorkspaceMembers: %w", err)
+	}
+	for _, m := range resp.Members {
+		if m.PrincipalSubject == subject {
+			return m.Role, nil
+		}
+	}
+	return openshellclient.WorkspaceRole_WORKSPACE_ROLE_UNSPECIFIED, fmt.Errorf("member %q not found in workspace %q despite AlreadyExists", subject, workspace)
 }
 
 func (r *OpenShellWorkspaceMemberReconciler) removeMember(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, workspace, subject string) error {

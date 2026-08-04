@@ -29,7 +29,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcstatus "google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -55,12 +57,18 @@ func newFakeOpenShellServer() *fakeOpenShellServer {
 	return &fakeOpenShellServer{members: map[string]map[string]openshellclient.WorkspaceRole{}}
 }
 
+// AddWorkspaceMember matches the real gateway's actual behavior (confirmed
+// live against SNO): a second Add for the same (workspace, subject) fails
+// with AlreadyExists rather than overwriting the role in place.
 func (f *fakeOpenShellServer) AddWorkspaceMember(_ context.Context, req *openshellclient.AddWorkspaceMemberRequest) (*openshellclient.AddWorkspaceMemberResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, fmt.Sprintf("add:%s:%s:%s", req.Workspace, req.PrincipalSubject, req.Role))
 	if f.members[req.Workspace] == nil {
 		f.members[req.Workspace] = map[string]openshellclient.WorkspaceRole{}
+	}
+	if _, exists := f.members[req.Workspace][req.PrincipalSubject]; exists {
+		return nil, grpcstatus.Error(codes.AlreadyExists, "member already exists in this workspace")
 	}
 	f.members[req.Workspace][req.PrincipalSubject] = req.Role
 	return &openshellclient.AddWorkspaceMemberResponse{Member: &openshellclient.WorkspaceMember{
@@ -80,6 +88,16 @@ func (f *fakeOpenShellServer) RemoveWorkspaceMember(_ context.Context, req *open
 		}
 	}
 	return &openshellclient.RemoveWorkspaceMemberResponse{Removed: removed}, nil
+}
+
+func (f *fakeOpenShellServer) ListWorkspaceMembers(_ context.Context, req *openshellclient.ListWorkspaceMembersRequest) (*openshellclient.ListWorkspaceMembersResponse, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	members := make([]*openshellclient.WorkspaceMember, 0, len(f.members[req.Workspace]))
+	for subject, role := range f.members[req.Workspace] {
+		members = append(members, &openshellclient.WorkspaceMember{PrincipalSubject: subject, Role: role})
+	}
+	return &openshellclient.ListWorkspaceMembersResponse{Members: members}, nil
 }
 
 // roleOf looks up a member's role in the "default" workspace -- the only
@@ -228,6 +246,45 @@ var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 		ready := findCondition(wm.Status.Conditions, "Ready")
 		Expect(ready).NotTo(BeNil())
 		Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+	})
+
+	It("tolerates re-reconciling an already-correct membership (AlreadyExists)", func() {
+		// The real gateway rejects a second AddWorkspaceMember for the same
+		// (workspace, subject) with AlreadyExists (confirmed live on SNO) --
+		// a reconcile loop will always eventually hit this on an unchanged
+		// object. This must not surface as a Failed/Ready=False cycle.
+		sa := createServiceAccount("wsmember-sa-5")
+		wm := &ogov1alpha1.OpenShellWorkspaceMember{
+			ObjectMeta: metav1.ObjectMeta{Name: "wm-5", Namespace: wsNamespace},
+			Spec: ogov1alpha1.OpenShellWorkspaceMemberSpec{
+				Workspace:         wsWorkspace,
+				ServiceAccountRef: ogov1alpha1.ServiceAccountReference{Name: sa.Name},
+				Role:              "user",
+			},
+		}
+		Expect(k8sClient.Create(ctx, wm)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, wm) }()
+
+		r := reconciler()
+		key := types.NamespacedName{Name: wm.Name, Namespace: wsNamespace}
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: key}) // adds finalizer
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		// A third reconcile of the same, unchanged object -- this is where
+		// AddWorkspaceMember hits AlreadyExists.
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, key, wm)).To(Succeed())
+		Expect(wm.Status.Phase).To(Equal("Synced"))
+		ready := findCondition(wm.Status.Conditions, "Ready")
+		Expect(ready).NotTo(BeNil())
+		Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+
+		role, ok := fakeServer.roleOf(string(sa.UID))
+		Expect(ok).To(BeTrue())
+		Expect(role).To(Equal(openshellclient.WorkspaceRole_WORKSPACE_ROLE_USER))
 	})
 
 	It("grants admin role when spec.role is admin", func() {
