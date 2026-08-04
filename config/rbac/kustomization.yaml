@@ -31,4 +31,7 @@ resources:
 - openshellgateway_admin_role.yaml
 - openshellgateway_editor_role.yaml
 - openshellgateway_viewer_role.yaml
+- openshellworkspacemember_admin_role.yaml
+- openshellworkspacemember_editor_role.yaml
+- openshellworkspacemember_viewer_role.yaml
 

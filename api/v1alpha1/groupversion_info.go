@@ -44,6 +44,8 @@ func addKnownTypes(s *runtime.Scheme) error {
 		&OpenShellProviderList{},
 		&OpenShellPolicy{},
 		&OpenShellPolicyList{},
+		&OpenShellWorkspaceMember{},
+		&OpenShellWorkspaceMemberList{},
 	)
 	metav1.AddToGroupVersion(s, GroupVersion)
 	return nil
