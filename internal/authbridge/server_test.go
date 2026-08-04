@@ -18,6 +18,7 @@ package authbridge
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -463,6 +464,77 @@ func TestTokenExchangeServiceAccountGroupLookup(t *testing.T) {
 	}
 	if resp["access_token"] == nil || resp["access_token"] == "" {
 		t.Error("access_token is empty")
+	}
+}
+
+func TestTokenExchangeServiceAccountEmptyUIDResolvesRealUID(t *testing.T) {
+	mock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/apis/user.openshift.io/v1/users/~":
+			// users/~ returns an empty uid for a ServiceAccount-shaped virtual
+			// User object — this is the real, confirmed-live OpenShift behavior
+			// this test guards against regressing.
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"name":"system:serviceaccount:mynamespace:mysa","uid":""},"groups":["system:authenticated","system:serviceaccounts"]}`))
+		case "/apis/user.openshift.io/v1/groups/openshell-users":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"metadata":{"name":"openshell-users"},"users":["system:serviceaccount:mynamespace:mysa"]}`))
+		case "/apis/authentication.k8s.io/v1/tokenreviews":
+			if r.Header.Get("Authorization") != "Bearer bridge-sa-token" {
+				http.Error(w, "forbidden: wrong token for TokenReview", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"status":{"authenticated":true,"user":{"username":"system:serviceaccount:mynamespace:mysa","uid":"real-sa-uid-123"}}}`))
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+		}
+	}))
+	defer mock.Close()
+
+	t.Setenv("KUBERNETES_API_URL", mock.URL)
+
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("bridge-sa-token"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	s := testServer(t)
+	s.osc.SATokenPath = tokenFile
+	handler := s.Handler()
+
+	req := httptest.NewRequest("POST", "/token/exchange", nil)
+	req.Header.Set("Authorization", "Bearer sa-token-123")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", w.Code, w.Body.String())
+	}
+
+	var resp map[string]interface{}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	accessToken, _ := resp["access_token"].(string)
+	if accessToken == "" {
+		t.Fatal("access_token is empty")
+	}
+
+	parts := strings.Split(accessToken, ".")
+	if len(parts) != 3 {
+		t.Fatalf("access_token is not a 3-part JWT: %q", accessToken)
+	}
+	claimsJSON, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatalf("decoding claims: %v", err)
+	}
+	var claims Claims
+	if err := json.Unmarshal(claimsJSON, &claims); err != nil {
+		t.Fatalf("unmarshaling claims: %v", err)
+	}
+	if claims.Subject != "real-sa-uid-123" {
+		t.Errorf("sub = %q, want the resolved ServiceAccount uid %q", claims.Subject, "real-sa-uid-123")
 	}
 }
 
