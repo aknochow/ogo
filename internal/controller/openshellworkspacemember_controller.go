@@ -104,6 +104,8 @@ func (r *OpenShellWorkspaceMemberReconciler) connect(ctx context.Context, gw *og
 // +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellworkspacemembers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellworkspacemembers/finalizers,verbs=update
 
+// Reconcile ensures the workspace membership described by an
+// OpenShellWorkspaceMember CR matches the remote gateway state.
 func (r *OpenShellWorkspaceMemberReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	wm := &ogov1alpha1.OpenShellWorkspaceMember{}
 	if err := r.Get(ctx, req.NamespacedName, wm); err != nil {
@@ -164,13 +166,25 @@ func (r *OpenShellWorkspaceMemberReconciler) reconcileSync(ctx context.Context, 
 			fmt.Errorf("ServiceAccount %s/%s has no uid", wm.Namespace, wm.Spec.ServiceAccountRef.Name))
 	}
 	currentSubject := string(sa.UID)
+
+	// From here on a remote call is always needed (at minimum the addMember
+	// below), so it's safe to connect once and share it -- avoids minting a
+	// second admin JWT and opening a second connection for the recreation
+	// case, which otherwise calls both removeMember and addMember in the
+	// same reconcile.
+	rpcCtx, wsClient, closeFn, err := r.workspaceClient(ctx, gw)
+	if err != nil {
+		return r.setNotReady(ctx, wm, "GatewayUnreachable", fmt.Errorf("connecting to gateway: %w", err))
+	}
+	defer closeFn()
+
 	if wm.Status.ReconciledSubject != "" && wm.Status.ReconciledSubject != currentSubject {
 		// The ServiceAccount was deleted and recreated (a new UID) since our
 		// last successful reconcile. Remove the stale membership first so a
 		// recreated identity never silently inherits the old one's access.
 		// Don't proceed to grant the new identity if this fails -- that
 		// would leave both the stale and new memberships active at once.
-		if err := r.removeMember(ctx, gw, wm.Spec.Workspace, wm.Status.ReconciledSubject); err != nil {
+		if err := removeMemberWithClient(rpcCtx, wsClient, wm.Spec.Workspace, wm.Status.ReconciledSubject); err != nil {
 			return r.setNotReady(ctx, wm, "GatewayUnreachable",
 				fmt.Errorf("removing stale membership for recreated identity: %w", err))
 		}
@@ -178,7 +192,7 @@ func (r *OpenShellWorkspaceMemberReconciler) reconcileSync(ctx context.Context, 
 	}
 
 	role := workspaceRoleFromSpec(wm.Spec.Role)
-	if err := r.addMember(ctx, gw, wm.Spec.Workspace, currentSubject, role); err != nil {
+	if err := addMemberWithClient(rpcCtx, wsClient, wm.Spec.Workspace, currentSubject, role); err != nil {
 		if errors.Is(err, errMembershipRemoved) {
 			// The subject's old-role membership is already gone remotely --
 			// don't let status keep claiming currentSubject is reconciled
@@ -277,22 +291,18 @@ func workspaceRoleFromSpec(role string) openshellclient.WorkspaceRole {
 	return openshellclient.WorkspaceRole_WORKSPACE_ROLE_USER
 }
 
-// addMember reconciles subject's membership to exactly (workspace, role),
-// tolerating repeated reconciles of an already-correct membership.
+// addMemberWithClient reconciles subject's membership to exactly (workspace,
+// role) over an already-open connection -- every reconcileSync call site
+// shares one connection (see reconcileSync), so there is no bare
+// no-shared-connection variant of this.
 // AddWorkspaceMember itself is not idempotent -- the gateway rejects a
 // second call for the same (workspace, subject) with AlreadyExists, which a
 // controller reconcile loop will always eventually trigger. On AlreadyExists,
 // look up the existing role: if it already matches, this is a no-op; if the
 // CR's spec.role changed, remove and re-add to pick up the new role (there
 // is no UpdateWorkspaceMember RPC).
-func (r *OpenShellWorkspaceMemberReconciler) addMember(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, workspace, subject string, role openshellclient.WorkspaceRole) error {
-	rpcCtx, wsClient, closeFn, err := r.workspaceClient(ctx, gw)
-	if err != nil {
-		return err
-	}
-	defer closeFn()
-
-	_, err = wsClient.AddWorkspaceMember(rpcCtx, &openshellclient.AddWorkspaceMemberRequest{
+func addMemberWithClient(rpcCtx context.Context, wsClient openshellclient.OpenShellClient, workspace, subject string, role openshellclient.WorkspaceRole) error {
+	_, err := wsClient.AddWorkspaceMember(rpcCtx, &openshellclient.AddWorkspaceMemberRequest{
 		Workspace:        workspace,
 		PrincipalSubject: subject,
 		Role:             role,
@@ -342,14 +352,19 @@ func findMemberRole(ctx context.Context, wsClient openshellclient.OpenShellClien
 	return openshellclient.WorkspaceRole_WORKSPACE_ROLE_UNSPECIFIED, fmt.Errorf("member %q not found in workspace %q despite AlreadyExists", subject, workspace)
 }
 
+// removeMember removes subject's membership over a fresh connection. See
+// removeMemberWithClient for callers that already have a connection open.
 func (r *OpenShellWorkspaceMemberReconciler) removeMember(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, workspace, subject string) error {
 	rpcCtx, wsClient, closeFn, err := r.workspaceClient(ctx, gw)
 	if err != nil {
 		return err
 	}
 	defer closeFn()
+	return removeMemberWithClient(rpcCtx, wsClient, workspace, subject)
+}
 
-	_, err = wsClient.RemoveWorkspaceMember(rpcCtx, &openshellclient.RemoveWorkspaceMemberRequest{
+func removeMemberWithClient(rpcCtx context.Context, wsClient openshellclient.OpenShellClient, workspace, subject string) error {
+	_, err := wsClient.RemoveWorkspaceMember(rpcCtx, &openshellclient.RemoveWorkspaceMemberRequest{
 		Workspace:        workspace,
 		PrincipalSubject: subject,
 	})
@@ -453,6 +468,7 @@ func (r *OpenShellWorkspaceMemberReconciler) dialCredentials(ctx context.Context
 	}), nil
 }
 
+// SetupWithManager registers the controller with the manager.
 func (r *OpenShellWorkspaceMemberReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&ogov1alpha1.OpenShellWorkspaceMember{}).
