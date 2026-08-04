@@ -214,6 +214,8 @@ func (r *OpenShellWorkspaceMemberReconciler) reconcileSync(ctx context.Context, 
 	return ctrl.Result{RequeueAfter: requeueInterval}, r.Status().Update(ctx, wm)
 }
 
+// reconcileDelete removes the subject's remote workspace membership before
+// allowing the finalizer to be dropped and the CR to be deleted.
 func (r *OpenShellWorkspaceMemberReconciler) reconcileDelete(ctx context.Context, wm *ogov1alpha1.OpenShellWorkspaceMember) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -330,7 +332,7 @@ func addMemberWithClient(rpcCtx context.Context, wsClient openshellclient.OpenSh
 	if _, err := wsClient.AddWorkspaceMember(rpcCtx, &openshellclient.AddWorkspaceMemberRequest{
 		Workspace: workspace, PrincipalSubject: subject, Role: role,
 	}); err != nil {
-		return fmt.Errorf("%w: AddWorkspaceMember (role change): %w", errMembershipRemoved, err)
+		return fmt.Errorf("%w: AddWorkspaceMember (role change): %v", errMembershipRemoved, err)
 	}
 	return nil
 }
@@ -432,13 +434,18 @@ func (r *OpenShellWorkspaceMemberReconciler) mintAdminToken(ctx context.Context,
 }
 
 // dialCredentials mirrors the gateway pod's own listener: plaintext when
-// spec.tls.enabled is false (the default, and the only shape exercised on
-// SNO/RDU today), or mTLS using the same shared self-signed CA/client cert
-// the operator already generates for internal clients when TLS is enabled.
+// spec.tls.enabled is explicitly false, or mTLS using the same shared
+// self-signed CA/client cert the operator already generates for internal
+// clients when TLS is enabled. TLS.Enabled defaults to true at the CRD
+// schema level (+kubebuilder:default=true), and nil is treated the same way
+// here -- matching every other TLS.Enabled check in this package
+// (openshellgateway_controller.go), where nil means "not explicitly
+// disabled" rather than "disabled". Plaintext is therefore only ever a
+// deliberate, explicit choice, never a silent fallback for an unset field.
 // The TLS branch has not been live-verified against a tls.enabled=true
-// deployment -- both real clusters run plaintext today.
+// deployment -- both real clusters run with it explicitly disabled today.
 func (r *OpenShellWorkspaceMemberReconciler) dialCredentials(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (credentials.TransportCredentials, error) {
-	tlsEnabled := gw.Spec.TLS.Enabled != nil && *gw.Spec.TLS.Enabled
+	tlsEnabled := gw.Spec.TLS.Enabled == nil || *gw.Spec.TLS.Enabled
 	if !tlsEnabled {
 		logf.FromContext(ctx).Info("dialing OpenShell gateway gRPC endpoint over plaintext; the openshell-admin JWT minted for this call will be transmitted in cleartext on the pod network -- set spec.tls.enabled to encrypt this channel")
 		return insecure.NewCredentials(), nil

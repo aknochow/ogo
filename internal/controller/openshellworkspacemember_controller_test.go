@@ -340,6 +340,23 @@ var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 		Expect(role).To(Equal(openshellclient.WorkspaceRole_WORKSPACE_ROLE_ADMIN))
 	})
 
+	It("treats an unset spec.tls.enabled as TLS-required, not as plaintext", func() {
+		// Regression test: dialCredentials must default a nil TLS.Enabled the
+		// same way every other TLS.Enabled check in this package does (nil
+		// means "not explicitly disabled", not "disabled"). Exercise the real
+		// dialCredentials directly since the fake gRPC server bypasses it.
+		gwNoTLS := &ogov1alpha1.OpenShellGateway{
+			Spec: ogov1alpha1.OpenShellGatewaySpec{Namespace: wsNamespace},
+		}
+		r := &OpenShellWorkspaceMemberReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		_, err := r.dialCredentials(ctx, gwNoTLS)
+		// With TLS.Enabled nil, dialCredentials must attempt the TLS path (and
+		// fail here since no client-TLS secret exists in this test) rather
+		// than silently falling back to plaintext insecure credentials.
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("client TLS secret"))
+	})
+
 	It("clears ReconciledSubject when a role-change re-add fails after the old membership was removed", func() {
 		// Regression test: addMember's role-change path first removes the
 		// old-role membership, then re-adds with the new role. If that
