@@ -17,6 +17,7 @@ limitations under the License.
 package authbridge
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -223,7 +224,7 @@ func (c *OpenShiftClient) tokenReviewUID(ctx context.Context, token string) (str
 	}
 
 	apiURL := c.kubeAPIURL() + "/apis/authentication.k8s.io/v1/tokenreviews"
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, strings.NewReader(string(reqBody)))
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(reqBody))
 	if err != nil {
 		return "", err
 	}
