@@ -12,7 +12,12 @@ name = "patternfly-6-dark"
 [[project.badges]]
 label = "Version"
 url   = "https://github.com/aknochow/ogo/releases"
-img   = "https://img.shields.io/badge/version-v0.1.0-orange"
+# Dynamic — pulls GitHub's own "Latest" release designation, so this
+# never needs a manual bump again. Depends on the release workflow
+# correctly NOT flagging dependency-only bump tags (vX.Y.Z-N) as
+# GitHub pre-releases, since this endpoint excludes prereleases/drafts
+# by default (see release.yml's prerelease: condition).
+img   = "https://img.shields.io/github/v/release/aknochow/ogo?label=version&color=orange"
 
 [[project.badges]]
 label = "Docs"
