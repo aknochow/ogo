@@ -31,9 +31,22 @@ updates:
   # never-built pin file at hack/openshell-pins/Dockerfile. See that
   # file's header comment for why it's named "Dockerfile" instead of
   # "Containerfile".
+  #
+  # groups: gateway and supervisor MUST land in one PR, never two.
+  # spec.imageTag is a single CRD field shared by both images (see
+  # openshellgateway_types.go), and upstream-sync.yml's sync job
+  # refuses to auto-tag a release when the two pins diverge - which is
+  # exactly what happens if Dependabot opens separate PRs for each
+  # FROM line (its default behavior, confirmed live 2026-08-04 with
+  # PRs #56/#57). The wildcard pattern is safe here because this
+  # directory pins exactly these two images and nothing else.
   - package-ecosystem: docker
     directory: /hack/openshell-pins
     schedule:
       interval: daily
     commit-message:
       prefix: "chore(openshell):"
+    groups:
+      openshell-images:
+        patterns:
+          - "*"
