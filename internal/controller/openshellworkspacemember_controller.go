@@ -112,8 +112,6 @@ func (r *OpenShellWorkspaceMemberReconciler) Reconcile(ctx context.Context, req 
 // reconcileSync resolves the gateway and the target ServiceAccount, then
 // reconciles workspace membership to match spec.
 func (r *OpenShellWorkspaceMemberReconciler) reconcileSync(ctx context.Context, wm *ogov1alpha1.OpenShellWorkspaceMember) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
 	gw, err := r.resolveGateway(ctx)
 	if err != nil {
 		return r.setNotReady(ctx, wm, "GatewayNotFound", err)
@@ -133,15 +131,23 @@ func (r *OpenShellWorkspaceMemberReconciler) reconcileSync(ctx context.Context, 
 	if !identityFound {
 		if wm.Status.ReconciledSubject != "" {
 			if rmErr := r.removeMember(ctx, gw, wm.Spec.Workspace, wm.Status.ReconciledSubject); rmErr != nil {
-				log.Error(rmErr, "failed to remove stale membership for a missing identity")
-			} else {
-				wm.Status.ReconciledSubject = ""
+				// The real problem here is the failed remote cleanup, not
+				// the (already-established) missing ServiceAccount -- report
+				// it as such so status doesn't mask a still-active stale
+				// membership behind an IdentityNotFound reason.
+				return r.setNotReady(ctx, wm, "GatewayUnreachable",
+					fmt.Errorf("removing stale membership for a deleted identity: %w", rmErr))
 			}
+			wm.Status.ReconciledSubject = ""
 		}
 		return r.setNotReady(ctx, wm, "IdentityNotFound",
 			fmt.Errorf("ServiceAccount %s/%s not found", saNamespace, wm.Spec.ServiceAccountRef.Name))
 	}
 
+	if sa.UID == "" {
+		return r.setNotReady(ctx, wm, "IdentityNotFound",
+			fmt.Errorf("ServiceAccount %s/%s has no uid", saNamespace, wm.Spec.ServiceAccountRef.Name))
+	}
 	currentSubject := string(sa.UID)
 	if wm.Status.ReconciledSubject != "" && wm.Status.ReconciledSubject != currentSubject {
 		// The ServiceAccount was deleted and recreated (a new UID) since our
@@ -421,6 +427,7 @@ func (r *OpenShellWorkspaceMemberReconciler) dialCredentials(ctx context.Context
 		Certificates: []tls.Certificate{cert},
 		RootCAs:      pool,
 		ServerName:   fmt.Sprintf("%s.%s.svc.cluster.local", gw.Name, gatewayNamespace(gw)),
+		MinVersion:   tls.VersionTLS12,
 	}), nil
 }
 
