@@ -1,0 +1,224 @@
+// Minimal client-side subset of the upstream OpenShell gateway's
+// openshell.v1.OpenShell gRPC service (github.com/nvidia/openshell,
+// proto/openshell.proto + proto/datamodel.proto + proto/sandbox.proto at the
+// pinned tag hack/openshell-pins references) — only the RPCs and messages
+// OGO's controllers actually call: workspace membership, provider
+// credentials, and the gateway-global policy lock.
+//
+// A gRPC client only needs matching method paths and request/response
+// message shapes for the RPCs it calls; it doesn't need the rest of the
+// service's ~50 other RPCs (sandboxes, drafts, inference, etc.) declared
+// there. Field numbers/types below are copied verbatim from upstream to
+// preserve wire compatibility — do not renumber. Upstream's per-method
+// `option (openshell.options.v1.authorization)` annotations are server-side
+// authorization config, not needed by a client, and are omitted; see
+// crates/openshell-server/src/auth/ upstream for the real requirement (every
+// RPC here requires a Bearer token with the configured admin_role -- the
+// same "openshell-admin" role satisfies workspace-admin, provider-admin, and
+// platform-admin/global-policy checks alike, confirmed by direct source
+// read, not merely inferred).
+//
+// All new messages below (Provider* and the policy/SandboxPolicy family)
+// intentionally omit fields OGO's controllers never set or read -- e.g.
+// Provider.credential_expires_at_ms/profile_workspace (refresh-managed
+// credentials and multi-workspace profiles, out of scope),
+// SandboxPolicy.landlock/network_middlewares (no CRD equivalent),
+// NetworkEndpoint's ~18 L7/GraphQL/MCP/SigV4 fields beyond the 5 the
+// existing OpenShellPolicy CRD already exposes. proto3 unknown-field
+// semantics make omitting a real field safe on both encode and decode.
+syntax = "proto3";
+
+package openshell.v1;
+
+option go_package = "github.com/aknochow/ogo/internal/openshellclient;openshellclient";
+
+service OpenShell {
+  rpc AddWorkspaceMember(AddWorkspaceMemberRequest) returns (AddWorkspaceMemberResponse);
+  rpc RemoveWorkspaceMember(RemoveWorkspaceMemberRequest) returns (RemoveWorkspaceMemberResponse);
+  rpc ListWorkspaceMembers(ListWorkspaceMembersRequest) returns (ListWorkspaceMembersResponse);
+
+  rpc CreateProvider(CreateProviderRequest) returns (ProviderResponse);
+  rpc UpdateProvider(UpdateProviderRequest) returns (ProviderResponse);
+  rpc DeleteProvider(DeleteProviderRequest) returns (DeleteProviderResponse);
+
+  rpc UpdateConfig(UpdateConfigRequest) returns (UpdateConfigResponse);
+}
+
+// Kubernetes-style metadata shared by all top-level OpenShell domain
+// objects. Verbatim copy of openshell.datamodel.v1.ObjectMeta.
+message ObjectMeta {
+  string id = 1;
+  string name = 2;
+  int64 created_at_ms = 3;
+  map<string, string> labels = 4;
+  uint64 resource_version = 5;
+  map<string, string> annotations = 6;
+  string workspace = 7;
+  int64 deletion_timestamp_ms = 8;
+}
+
+// Workspace-scoped role for members.
+enum WorkspaceRole {
+  WORKSPACE_ROLE_UNSPECIFIED = 0;
+  WORKSPACE_ROLE_USER = 1;
+  WORKSPACE_ROLE_ADMIN = 2;
+}
+
+// Workspace membership record.
+message WorkspaceMember {
+  ObjectMeta metadata = 1;
+  // OIDC subject claim identifying the principal.
+  string principal_subject = 2;
+  WorkspaceRole role = 3;
+}
+
+message AddWorkspaceMemberRequest {
+  string workspace = 1;
+  string principal_subject = 2;
+  WorkspaceRole role = 3;
+}
+
+message AddWorkspaceMemberResponse {
+  WorkspaceMember member = 1;
+}
+
+message RemoveWorkspaceMemberRequest {
+  string workspace = 1;
+  string principal_subject = 2;
+}
+
+message RemoveWorkspaceMemberResponse {
+  bool removed = 1;
+}
+
+message ListWorkspaceMembersRequest {
+  string workspace = 1;
+  uint32 limit = 2;
+  uint32 offset = 3;
+}
+
+message ListWorkspaceMembersResponse {
+  repeated WorkspaceMember members = 1;
+}
+
+// Provider model, verbatim subset of openshell.datamodel.v1.Provider
+// (proto/datamodel.proto:71-88 upstream). Field numbers 5 (
+// credential_expires_at_ms) and 6 (profile_workspace) intentionally
+// skipped -- not set or read by OGO's controller.
+message Provider {
+  ObjectMeta metadata = 1;
+  string type = 2;
+  // Env-var-name -> value. Upsert-or-leave-untouched on Update: a key with a
+  // non-empty value is set, a key with an empty string value is deleted, a
+  // key omitted entirely from the request is left unchanged server-side.
+  map<string, string> credentials = 3;
+  // Same upsert/leave-untouched/empty-string-deletes semantics as credentials.
+  map<string, string> config = 4;
+}
+
+message CreateProviderRequest {
+  Provider provider = 1;
+  string workspace = 2;
+}
+
+message UpdateProviderRequest {
+  Provider provider = 1;
+  // Field 2 (credential_expires_at_ms) intentionally skipped, see Provider.
+  string workspace = 3;
+}
+
+message DeleteProviderRequest {
+  string name = 1;
+  string workspace = 2;
+}
+
+message DeleteProviderResponse {
+  bool deleted = 1;
+}
+
+message ProviderResponse {
+  Provider provider = 1;
+}
+
+// Verbatim subset of openshell.sandbox.v1.FilesystemPolicy
+// (proto/sandbox.proto:35-42 upstream).
+message FilesystemPolicy {
+  bool include_workdir = 1;
+  repeated string read_only = 2;
+  repeated string read_write = 3;
+}
+
+// Verbatim subset of openshell.sandbox.v1.ProcessPolicy
+// (proto/sandbox.proto:51-57 upstream).
+message ProcessPolicy {
+  string run_as_user = 1;
+  string run_as_group = 2;
+}
+
+// Verbatim subset of openshell.sandbox.v1.NetworkBinary
+// (proto/sandbox.proto:289-293 upstream). Field 2 (harness) is
+// upstream-deprecated and skipped.
+message NetworkBinary {
+  string path = 1;
+}
+
+// Subset of openshell.sandbox.v1.NetworkEndpoint (proto/sandbox.proto:97-178
+// upstream) -- only the 5 fields OGO's OpenShellPolicy CRD exposes today
+// (host, port, protocol, enforcement, access). Field 4 (tls) and fields
+// 7-23 (explicit L7 allow/deny rules, allowed_ips, multi-port, GraphQL,
+// path scoping, credential rewriting, SigV4 signing, MCP options) are
+// intentionally skipped -- no CRD equivalent, not a regression since the
+// CRD never exposed them.
+message NetworkEndpoint {
+  string host = 1;
+  // uint32, matching upstream exactly -- not int32.
+  uint32 port = 2;
+  string protocol = 3;
+  string enforcement = 5;
+  string access = 6;
+}
+
+// Verbatim subset of openshell.sandbox.v1.NetworkPolicyRule
+// (proto/sandbox.proto:59-66 upstream). The map key (in SandboxPolicy,
+// below) is authoritative for addressing a rule; name is a cosmetic label.
+message NetworkPolicyRule {
+  string name = 1;
+  repeated NetworkEndpoint endpoints = 2;
+  repeated NetworkBinary binaries = 3;
+}
+
+// Subset of openshell.sandbox.v1.SandboxPolicy (proto/sandbox.proto:18-31
+// upstream). Field 1 (version) is server-assigned and skipped. Field 3
+// (landlock) and field 6 (network_middlewares) have no OpenShellPolicy CRD
+// equivalent and are skipped -- server defaults apply when omitted.
+message SandboxPolicy {
+  FilesystemPolicy filesystem = 2;
+  ProcessPolicy process = 4;
+  map<string, NetworkPolicyRule> network_policies = 5;
+}
+
+// Subset of UpdateConfigRequest (proto/openshell.proto:1747-1785 upstream).
+// OGO only ever uses this at global=true scope: name is always empty,
+// merge_operations/expected_resource_version/annotations (fields 7-9) are
+// unused (merge ops are rejected server-side for global scope anyway; no
+// CAS or annotation use case exists for a gateway-wide policy push).
+message UpdateConfigRequest {
+  // Sandbox name; always empty for OGO's global-only usage.
+  string name = 1;
+  SandboxPolicy policy = 2;
+  // Set to "policy" for the delete-global-policy path only.
+  string setting_key = 3;
+  bool delete_setting = 5;
+  // Always true for OGO -- gateway-wide policy, never sandbox-scoped.
+  bool global = 6;
+  string workspace = 10;
+}
+
+// Subset of UpdateConfigResponse (proto/openshell.proto:1832-1843 upstream).
+// Field 5 (annotations) is skipped -- always empty for global updates.
+message UpdateConfigResponse {
+  uint32 version = 1;
+  string policy_hash = 2;
+  uint64 settings_revision = 3;
+  bool deleted = 4;
+}
