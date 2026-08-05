@@ -27,10 +27,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
@@ -38,6 +41,23 @@ import (
 )
 
 const policyFinalizer = "ogo.aknochow.io/policy-cleanup"
+
+// policySelfWatchPredicate re-enqueues every OpenShellPolicy CR only on
+// Delete events. The only thing that ever needs another CR to re-evaluate
+// itself is the active CR being deleted (so the next-oldest can be promoted
+// without waiting for its own periodic reconcile) -- a newly created CR
+// resolves its own active/superseded state via its own Reconcile call
+// already. Reacting to Create/Update here would cause a continuous
+// reconcile storm: every reconcile ends with a Status().Update() that bumps
+// resourceVersion regardless of whether the content actually changed, which
+// would re-trigger this same watch, re-enqueue every policy, and never
+// settle into an idle steady state.
+var policySelfWatchPredicate = predicate.Funcs{
+	CreateFunc:  func(event.CreateEvent) bool { return false },
+	UpdateFunc:  func(event.UpdateEvent) bool { return false },
+	DeleteFunc:  func(event.DeleteEvent) bool { return true },
+	GenericFunc: func(event.GenericEvent) bool { return false },
+}
 
 // OpenShellPolicyReconciler reconciles OpenShellPolicy objects. Unlike
 // OpenShellProvider, the real gateway has no standalone named/reusable
@@ -305,15 +325,24 @@ func (r *OpenShellPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&ogov1alpha1.OpenShellPolicy{}).
 		// findAllPolicies ignores which type triggered it and just requeues
 		// every existing OpenShellPolicy CR, so the same handler serves
-		// both watches: Gateway changes, and (self-watch, below) Policy
-		// changes -- so deleting the active CR promotes the next-oldest
-		// surviving one promptly, instead of waiting up to requeueInterval
-		// for its own periodic reconcile to notice.
+		// both watches below. Both are filtered: every reconcile ends with a
+		// Status().Update() that bumps resourceVersion regardless of
+		// whether the content actually changed, so an unfiltered watch on
+		// either type would fire again on that update, re-enqueue every
+		// policy, and never settle into an idle steady state.
+		//
+		// Gateway: only a real spec change (a gateway newly created, or its
+		// config changed) can affect whether a Policy CR that was stuck on
+		// GatewayNotFound can now proceed -- the gateway's own periodic
+		// status-only refresh never matters here.
 		Watches(&ogov1alpha1.OpenShellGateway{},
 			handler.EnqueueRequestsFromMapFunc(r.findAllPolicies),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
+		// Self-watch, filtered to Delete only -- see policySelfWatchPredicate.
 		Watches(&ogov1alpha1.OpenShellPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.findAllPolicies),
+			builder.WithPredicates(policySelfWatchPredicate),
 		).
 		Named("openshellpolicy").
 		Complete(r)

@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
@@ -361,5 +362,19 @@ var _ = Describe("OpenShellPolicy Controller", func() {
 		Expect(ready).NotTo(BeNil())
 		Expect(ready.Reason).To(Equal("GatewayNotFound"))
 		Expect(fakeServer.callLog()).To(BeEmpty())
+	})
+})
+
+var _ = Describe("policySelfWatchPredicate", func() {
+	// Regression test for a real reconcile-storm bug: the self-watch must
+	// only react to Delete events. Every reconcile ends with a
+	// Status().Update() that bumps resourceVersion regardless of whether
+	// the content changed, so an unfiltered watch on Create/Update would
+	// re-trigger itself, re-enqueue every policy, and never settle.
+	It("reacts only to Delete events", func() {
+		Expect(policySelfWatchPredicate.Create(event.CreateEvent{})).To(BeFalse())
+		Expect(policySelfWatchPredicate.Update(event.UpdateEvent{})).To(BeFalse())
+		Expect(policySelfWatchPredicate.Delete(event.DeleteEvent{})).To(BeTrue())
+		Expect(policySelfWatchPredicate.Generic(event.GenericEvent{})).To(BeFalse())
 	})
 })
