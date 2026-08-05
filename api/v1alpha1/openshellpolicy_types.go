@@ -106,8 +106,11 @@ type ProcessPolicy struct {
 
 // OpenShellPolicyStatus defines the observed state of the policy.
 type OpenShellPolicyStatus struct {
-	// Phase is the current lifecycle phase.
-	// +kubebuilder:validation:Enum=Pending;Synced;Failed
+	// Phase is the current lifecycle phase. Superseded means another
+	// OpenShellPolicy CR is the active gateway-global policy; this
+	// resource's spec has no effect on the gateway while true (see
+	// AppliedToGateway).
+	// +kubebuilder:validation:Enum=Pending;Synced;Failed;Superseded
 	Phase string `json:"phase,omitempty"`
 
 	// ObservedGeneration is the latest generation observed by the controller.
@@ -117,6 +120,15 @@ type OpenShellPolicyStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// AppliedToGateway is true once this CR has successfully pushed its
+	// policy as the gateway's global policy. Only one OpenShellPolicy CR can
+	// be active at a time (oldest-wins); this field lets the finalizer tell
+	// "I was the active singleton and must retract my policy from the
+	// gateway" apart from "I was always superseded and must not touch
+	// gateway state at all" on deletion.
+	// +optional
+	AppliedToGateway bool `json:"appliedToGateway,omitempty"`
 }
 
 // +kubebuilder:object:root=true

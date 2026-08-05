@@ -65,6 +65,11 @@ const (
 	managedByValue   = "ogo"
 	defaultNamespace = "ogo"
 	phaseFailed      = "Failed"
+	// phaseSuperseded marks an OpenShellPolicy CR that isn't the active
+	// gateway-global policy (see OpenShellPolicyReconciler). Not a failure --
+	// collapsing it into phaseFailed would repeat the same "reports success
+	// while doing nothing" problem #51/#52 were filed for.
+	phaseSuperseded = "Superseded"
 
 	// reasonHostnameMissing is set by both reconcileGatewayAPI and
 	// reconcileEnvoyRoute (each independently checks route.hostname, since
