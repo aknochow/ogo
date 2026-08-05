@@ -348,8 +348,7 @@ var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 		gwNoTLS := &ogov1alpha1.OpenShellGateway{
 			Spec: ogov1alpha1.OpenShellGatewaySpec{Namespace: wsNamespace},
 		}
-		r := &OpenShellWorkspaceMemberReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
-		_, err := r.dialCredentials(ctx, gwNoTLS)
+		_, err := dialCredentials(ctx, k8sClient, gwNoTLS)
 		// With TLS.Enabled nil, dialCredentials must attempt the TLS path (and
 		// fail here since no client-TLS secret exists in this test) rather
 		// than silently falling back to plaintext insecure credentials.

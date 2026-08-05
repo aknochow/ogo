@@ -118,12 +118,11 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 	if len(gwList.Items) > 1 {
-		oldest := gwList.Items[0]
-		for _, item := range gwList.Items[1:] {
-			if item.CreationTimestamp.Before(&oldest.CreationTimestamp) {
-				oldest = item
-			}
+		items := make([]*ogov1alpha1.OpenShellGateway, len(gwList.Items))
+		for i := range gwList.Items {
+			items[i] = &gwList.Items[i]
 		}
+		oldest := oldestByCreationTimestamp(items)
 		if gw.Name != oldest.Name {
 			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
 				Type: ogov1alpha1.ConditionDegraded, Status: metav1.ConditionTrue,
