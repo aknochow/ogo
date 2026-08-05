@@ -29,7 +29,15 @@ import (
 // T must be a pointer to a type embedding metav1.ObjectMeta (satisfied by
 // every generated CRD type in api/v1alpha1) since GetCreationTimestamp has a
 // pointer receiver.
+//
+// Precondition: items must be non-empty -- every current call site already
+// guards this (each only calls in after confirming len(items) > 0), so this
+// panics with a clear message instead of silently returning a zero value
+// that could mask a caller's missing guard.
 func oldestByCreationTimestamp[T metav1.Object](items []T) T {
+	if len(items) == 0 {
+		panic("oldestByCreationTimestamp: items must be non-empty")
+	}
 	oldest := items[0]
 	oldestTS := oldest.GetCreationTimestamp()
 	for _, item := range items[1:] {

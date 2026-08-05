@@ -303,6 +303,13 @@ var _ = Describe("OpenShellPolicy Controller", func() {
 		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: olderKey})
 		Expect(err).NotTo(HaveOccurred())
 
+		// The gateway must never be left with no global policy at all during
+		// the handoff: since a successor CR exists, older's own deletion
+		// must skip the delete-global-policy call entirely and let newer's
+		// reconcile (below) replace the policy directly.
+		Expect(fakeServer.callLog()).NotTo(ContainElement("deleteGlobalPolicy"))
+		Expect(fakeServer.globalPolicySnapshot()).NotTo(BeNil(), "the gateway must still hold older's policy until the successor overwrites it")
+
 		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: newerKey})
 		Expect(err).NotTo(HaveOccurred())
 

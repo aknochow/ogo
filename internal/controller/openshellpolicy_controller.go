@@ -76,7 +76,7 @@ func resolveActivePolicy(ctx context.Context, c client.Client) (*ogov1alpha1.Ope
 
 // buildSandboxPolicy maps an OpenShellPolicySpec 1:1 onto the gateway's
 // SandboxPolicy message.
-func buildSandboxPolicy(spec *ogov1alpha1.OpenShellPolicySpec) *openshellclient.SandboxPolicy {
+func buildSandboxPolicy(spec ogov1alpha1.OpenShellPolicySpec) *openshellclient.SandboxPolicy {
 	desired := &openshellclient.SandboxPolicy{}
 	if spec.Filesystem != nil {
 		desired.Filesystem = &openshellclient.FilesystemPolicy{
@@ -172,7 +172,7 @@ func (r *OpenShellPolicyReconciler) reconcileSync(ctx context.Context, policy *o
 	defer closeFn()
 
 	_, err = wsClient.UpdateConfig(rpcCtx, &openshellclient.UpdateConfigRequest{
-		Policy:    buildSandboxPolicy(&policy.Spec),
+		Policy:    buildSandboxPolicy(policy.Spec),
 		Global:    true,
 		Workspace: defaultOpenShellWorkspace,
 	})
@@ -193,9 +193,36 @@ func (r *OpenShellPolicyReconciler) reconcileSync(ctx context.Context, policy *o
 	return ctrl.Result{RequeueAfter: requeueInterval}, r.Status().Update(ctx, policy)
 }
 
+// hasSuccessorPolicy reports whether any OpenShellPolicy CR other than
+// excludeUID currently exists. Kubernetes List still returns an object with
+// a DeletionTimestamp set until its last finalizer is removed, so the
+// currently-deleting CR itself must be excluded explicitly.
+func hasSuccessorPolicy(ctx context.Context, c client.Client, excludeUID types.UID) (bool, error) {
+	policyList := &ogov1alpha1.OpenShellPolicyList{}
+	if err := c.List(ctx, policyList); err != nil {
+		return false, err
+	}
+	for _, p := range policyList.Items {
+		if p.UID != excludeUID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // reconcileDelete retracts this CR's policy from the gateway, but only if it
 // was ever actually applied there (status.AppliedToGateway) -- a superseded
 // CR that was never the active singleton must never touch gateway state.
+//
+// If another OpenShellPolicy CR exists, the retraction is skipped entirely:
+// that CR's own reconcile (triggered by the self-watch) will push a full
+// replacement policy via UpdateConfig, which is a full replace, not a merge.
+// Retracting first would leave the gateway with no global policy at all
+// (falling back to the restrictive default) for the window between this
+// CR's finalizer running and the successor's reconcile catching up. Skipping
+// the retraction instead means the deleted CR's policy content simply stays
+// live, unowned, until the successor overwrites it -- a strictly safer
+// transition with no gap.
 func (r *OpenShellPolicyReconciler) reconcileDelete(ctx context.Context, policy *ogov1alpha1.OpenShellPolicy) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -204,28 +231,35 @@ func (r *OpenShellPolicyReconciler) reconcileDelete(ctx context.Context, policy 
 	}
 
 	if policy.Status.AppliedToGateway {
-		gw, err := resolveGateway(ctx, r.Client)
+		hasSuccessor, err := hasSuccessorPolicy(ctx, r.Client, policy.UID)
 		if err != nil {
-			log.Error(err, "no gateway found during cleanup, will retry")
-			return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
+			return ctrl.Result{}, err
 		}
 
-		rpcCtx, wsClient, closeFn, err := gatewayClient(ctx, r.Client, r.connectClient, gw)
-		if err != nil {
-			log.Error(err, "failed to connect to gateway during cleanup, will retry")
-			return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
-		}
-		defer closeFn()
+		if !hasSuccessor {
+			gw, err := resolveGateway(ctx, r.Client)
+			if err != nil {
+				log.Error(err, "no gateway found during cleanup, will retry")
+				return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
+			}
 
-		_, err = wsClient.UpdateConfig(rpcCtx, &openshellclient.UpdateConfigRequest{
-			SettingKey:    "policy",
-			DeleteSetting: true,
-			Global:        true,
-			Workspace:     defaultOpenShellWorkspace,
-		})
-		if err != nil {
-			log.Error(err, "failed to delete global policy on gateway, will retry")
-			return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
+			rpcCtx, wsClient, closeFn, err := gatewayClient(ctx, r.Client, r.connectClient, gw)
+			if err != nil {
+				log.Error(err, "failed to connect to gateway during cleanup, will retry")
+				return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
+			}
+			defer closeFn()
+
+			_, err = wsClient.UpdateConfig(rpcCtx, &openshellclient.UpdateConfigRequest{
+				SettingKey:    "policy",
+				DeleteSetting: true,
+				Global:        true,
+				Workspace:     defaultOpenShellWorkspace,
+			})
+			if err != nil {
+				log.Error(err, "failed to delete global policy on gateway, will retry")
+				return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
+			}
 		}
 		policy.Status.AppliedToGateway = false
 	}
@@ -235,13 +269,19 @@ func (r *OpenShellPolicyReconciler) reconcileDelete(ctx context.Context, policy 
 }
 
 // setNotReady records a Synced=False condition and a Failed phase. For
-// GatewayUnreachable specifically, the underlying cause is logged
-// server-side only; the CR's status gets a generic message instead.
+// GatewayUnreachable and InvalidPolicySpec, the underlying cause -- a raw
+// gateway gRPC error, which can echo back gateway-internal detail -- is
+// logged server-side only; the CR's status, readable by anyone with get
+// access to it, gets a generic message instead.
 func (r *OpenShellPolicyReconciler) setNotReady(ctx context.Context, policy *ogov1alpha1.OpenShellPolicy, reason string, cause error) (ctrl.Result, error) {
 	message := cause.Error()
-	if reason == "GatewayUnreachable" {
+	switch reason {
+	case "GatewayUnreachable":
 		logf.FromContext(ctx).Error(cause, "gateway unreachable while reconciling policy")
 		message = "failed to reach the OpenShell gateway; see operator logs for details"
+	case "InvalidPolicySpec":
+		logf.FromContext(ctx).Error(cause, "gateway rejected policy spec")
+		message = "the gateway rejected this policy's spec; see operator logs for details"
 	}
 	meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
 		Type: "Synced", Status: metav1.ConditionFalse, Reason: reason, Message: message,

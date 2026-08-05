@@ -40,6 +40,8 @@ import (
 // Shared by every controller that calls the gateway's gRPC API
 // (OpenShellWorkspaceMember, OpenShellProvider, OpenShellPolicy).
 const (
+	// --- Auth ---
+
 	// Mirrors gateway.toml's hardcoded admin_role (internal/gateway/config.go)
 	// and auth-bridge's own roleAdmin constant -- there's no shared exported
 	// constant for this across packages today. The same role satisfies every
@@ -57,19 +59,23 @@ const (
 	// never persisted, used for a single gRPC call.
 	adminTokenTTL = 60 * time.Second
 
+	// --- Network ---
+
 	// gatewayGRPCPort is the gateway's in-cluster gRPC listener port.
 	gatewayGRPCPort = 8080
+
+	// gatewayRetryInterval is the shared backoff used when a gateway gRPC
+	// call fails transiently (unreachable, temporarily blocked) across the
+	// controllers that talk to it.
+	gatewayRetryInterval = 30 * time.Second
+
+	// --- Domain ---
 
 	// defaultOpenShellWorkspace is the gateway's own default workspace,
 	// auto-seeded server-side at gateway startup. OGO is a single-tenant,
 	// single-workspace deployment today -- every gRPC call that takes a
 	// workspace argument uses this constant.
 	defaultOpenShellWorkspace = "default"
-
-	// gatewayRetryInterval is the shared backoff used when a gateway gRPC
-	// call fails transiently (unreachable, temporarily blocked) across the
-	// controllers that talk to it.
-	gatewayRetryInterval = 30 * time.Second
 )
 
 // gatewayConnectFunc constructs a client for the gateway's gRPC API and a

@@ -226,10 +226,14 @@ func (r *OpenShellProviderReconciler) reconcileDelete(ctx context.Context, provi
 			// The provider is still attached to one or more sandboxes -- the
 			// gateway refuses to delete it. Don't drop the finalizer; this
 			// needs the sandbox(es) detached first, not a retry of the same
-			// call.
+			// call. The real error names the attached sandbox(es) by name --
+			// that's information about a different resource than this CR,
+			// which anyone with read access to this Provider may not have
+			// access to; log it server-side only.
+			log.Error(err, "gateway refused provider deletion")
 			meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
 				Type: "Synced", Status: metav1.ConditionFalse, Reason: "DeletionBlocked",
-				Message: err.Error(),
+				Message: "provider cannot be deleted while still attached to one or more sandboxes; see operator logs for details",
 			})
 			provider.Status.Phase = phaseFailed
 			if updErr := r.Status().Update(ctx, provider); updErr != nil {
@@ -246,13 +250,19 @@ func (r *OpenShellProviderReconciler) reconcileDelete(ctx context.Context, provi
 }
 
 // setNotReady records a Synced=False condition and a Failed phase. For
-// GatewayUnreachable specifically, the underlying cause is logged
-// server-side only; the CR's status gets a generic message instead.
+// GatewayUnreachable and InvalidProviderSpec, the underlying cause -- a raw
+// gateway gRPC error, which can echo back gateway-internal detail -- is
+// logged server-side only; the CR's status, readable by anyone with get
+// access to it, gets a generic message instead.
 func (r *OpenShellProviderReconciler) setNotReady(ctx context.Context, provider *ogov1alpha1.OpenShellProvider, reason string, cause error) (ctrl.Result, error) {
 	message := cause.Error()
-	if reason == "GatewayUnreachable" {
+	switch reason {
+	case "GatewayUnreachable":
 		logf.FromContext(ctx).Error(cause, "gateway unreachable while reconciling provider")
 		message = "failed to reach the OpenShell gateway; see operator logs for details"
+	case "InvalidProviderSpec":
+		logf.FromContext(ctx).Error(cause, "gateway rejected provider spec")
+		message = "the gateway rejected this provider's spec; see operator logs for details"
 	}
 	meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
 		Type: "Synced", Status: metav1.ConditionFalse, Reason: reason, Message: message,
