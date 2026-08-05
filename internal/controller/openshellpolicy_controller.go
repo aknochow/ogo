@@ -261,9 +261,15 @@ func (r *OpenShellPolicyReconciler) reconcileDelete(ctx context.Context, policy 
 				return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
 			}
 		}
-		policy.Status.AppliedToGateway = false
 	}
 
+	// No need to persist status.AppliedToGateway = false here: this CR is
+	// about to be fully deleted the moment its finalizer is gone (the plain
+	// Update below can't write .status through the status subresource
+	// anyway), and if the finalizer removal below fails for any reason, the
+	// next reconcile re-reads AppliedToGateway fresh from etcd and redoes
+	// this logic from scratch. Matches OpenShellWorkspaceMemberReconciler's
+	// own reconcileDelete, which doesn't bother clearing status either.
 	controllerutil.RemoveFinalizer(policy, policyFinalizer)
 	return ctrl.Result{}, r.Update(ctx, policy)
 }
@@ -297,21 +303,20 @@ func (r *OpenShellPolicyReconciler) setNotReady(ctx context.Context, policy *ogo
 func (r *OpenShellPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&ogov1alpha1.OpenShellPolicy{}).
-		Watches(&ogov1alpha1.OpenShellGateway{},
-			handler.EnqueueRequestsFromMapFunc(r.findPoliciesForGateway),
-		).
-		// Self-watch so deleting the active CR promotes the next-oldest
+		// findAllPolicies ignores which type triggered it and just requeues
+		// every existing OpenShellPolicy CR, so the same handler serves
+		// both watches: Gateway changes, and (self-watch, below) Policy
+		// changes -- so deleting the active CR promotes the next-oldest
 		// surviving one promptly, instead of waiting up to requeueInterval
 		// for its own periodic reconcile to notice.
+		Watches(&ogov1alpha1.OpenShellGateway{},
+			handler.EnqueueRequestsFromMapFunc(r.findAllPolicies),
+		).
 		Watches(&ogov1alpha1.OpenShellPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.findAllPolicies),
 		).
 		Named("openshellpolicy").
 		Complete(r)
-}
-
-func (r *OpenShellPolicyReconciler) findPoliciesForGateway(ctx context.Context, _ client.Object) []reconcile.Request {
-	return r.findAllPolicies(ctx, nil)
 }
 
 func (r *OpenShellPolicyReconciler) findAllPolicies(ctx context.Context, _ client.Object) []reconcile.Request {
