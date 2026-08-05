@@ -176,6 +176,15 @@ func (r *OpenShellPolicyReconciler) reconcileSync(ctx context.Context, policy *o
 			Message: fmt.Sprintf("OpenShellPolicy %s/%s is the active gateway policy; this resource has no effect until it is deleted", active.Namespace, active.Name),
 		})
 		policy.Status.Phase = phaseSuperseded
+		// Clear AppliedToGateway even if this CR was previously active: it
+		// no longer owns the gateway's global policy, so its own
+		// reconcileDelete must never attempt to retract it later (which
+		// would undo whatever the newly-active CR has pushed). Two CRs can
+		// tie on CreationTimestamp (only second-granularity) and flip which
+		// one resolveActivePolicy resolves as active between reconciles
+		// depending on List's return order -- this keeps that transition
+		// safe regardless of how it happens.
+		policy.Status.AppliedToGateway = false
 		policy.Status.ObservedGeneration = policy.Generation
 		return ctrl.Result{RequeueAfter: requeueInterval}, r.Status().Update(ctx, policy)
 	}

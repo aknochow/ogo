@@ -240,6 +240,45 @@ var _ = Describe("OpenShellPolicy Controller", func() {
 		Expect(errors.IsNotFound(err)).To(BeTrue())
 	})
 
+	It("clears a stale AppliedToGateway=true when a CR resolves as superseded", func() {
+		// Regression test: CreationTimestamp only has second-granularity, so
+		// two CRs can tie, and List's return order could resolve a
+		// different CR as active between reconciles even if this one was
+		// previously active. If AppliedToGateway were left true in that
+		// case, this CR's own later deletion would incorrectly try to
+		// retract the policy that the real active CR has since pushed.
+		// Simulate the "was previously active" state directly since the
+		// underlying timestamp tie can't be reproduced deterministically.
+		active := newPolicy("real-active", nil)
+		Expect(k8sClient.Create(ctx, active)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, active) }()
+
+		r := reconciler()
+		activeKey := types.NamespacedName{Name: active.Name, Namespace: polNamespace}
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: activeKey})
+		_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: activeKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		time.Sleep(1100 * time.Millisecond) // see comment above on tied CreationTimestamps
+
+		superseded := newPolicy("stale-applied", nil)
+		Expect(k8sClient.Create(ctx, superseded)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, superseded) }()
+		supersededKey := types.NamespacedName{Name: superseded.Name, Namespace: polNamespace}
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: supersededKey})
+
+		Expect(k8sClient.Get(ctx, supersededKey, superseded)).To(Succeed())
+		superseded.Status.AppliedToGateway = true
+		Expect(k8sClient.Status().Update(ctx, superseded)).To(Succeed())
+
+		_, err = r.Reconcile(ctx, reconcile.Request{NamespacedName: supersededKey})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(k8sClient.Get(ctx, supersededKey, superseded)).To(Succeed())
+		Expect(superseded.Status.Phase).To(Equal(phaseSuperseded))
+		Expect(superseded.Status.AppliedToGateway).To(BeFalse())
+	})
+
 	It("deletes a superseded CR without ever touching the gateway", func() {
 		active := newPolicy("stays-active", nil)
 		Expect(k8sClient.Create(ctx, active)).To(Succeed())
