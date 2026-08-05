@@ -18,170 +18,20 @@ package controller
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
-	"net"
-	"sync"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
-	grpcstatus "google.golang.org/grpc/status"
-	"google.golang.org/grpc/test/bufconn"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	corev1 "k8s.io/api/core/v1"
+
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
 	"github.com/aknochow/ogo/internal/openshellclient"
 )
-
-// fakeOpenShellServer is an in-process, in-memory stand-in for the real
-// OpenShell gateway's workspace-membership RPCs.
-type fakeOpenShellServer struct {
-	openshellclient.UnimplementedOpenShellServer
-
-	mu      sync.Mutex
-	members map[string]map[string]openshellclient.WorkspaceRole // workspace -> subject -> role
-	calls   []string
-
-	// failRemoveSubject, when set, makes RemoveWorkspaceMember fail for that
-	// exact subject only -- used to simulate a transient remote failure.
-	failRemoveSubject string
-
-	// failAddSubject, when set, makes AddWorkspaceMember fail for that exact
-	// subject only when it is not already a member -- i.e. it only affects a
-	// genuine add/re-add, never the AlreadyExists path an existing member
-	// hits. Used to simulate the re-add half of a role change failing after
-	// the old-role membership has already been removed.
-	failAddSubject string
-}
-
-func newFakeOpenShellServer() *fakeOpenShellServer {
-	return &fakeOpenShellServer{members: map[string]map[string]openshellclient.WorkspaceRole{}}
-}
-
-func (f *fakeOpenShellServer) setFailRemoveSubject(subject string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.failRemoveSubject = subject
-}
-
-func (f *fakeOpenShellServer) setFailAddSubject(subject string) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.failAddSubject = subject
-}
-
-// AddWorkspaceMember matches the real gateway's actual behavior (confirmed
-// live against SNO): a second Add for the same (workspace, subject) fails
-// with AlreadyExists rather than overwriting the role in place.
-func (f *fakeOpenShellServer) AddWorkspaceMember(_ context.Context, req *openshellclient.AddWorkspaceMemberRequest) (*openshellclient.AddWorkspaceMemberResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, fmt.Sprintf("add:%s:%s:%s", req.Workspace, req.PrincipalSubject, req.Role))
-	if f.members[req.Workspace] == nil {
-		f.members[req.Workspace] = map[string]openshellclient.WorkspaceRole{}
-	}
-	if _, exists := f.members[req.Workspace][req.PrincipalSubject]; exists {
-		return nil, grpcstatus.Error(codes.AlreadyExists, "member already exists in this workspace")
-	}
-	if f.failAddSubject != "" && req.PrincipalSubject == f.failAddSubject {
-		return nil, grpcstatus.Error(codes.Unavailable, "simulated remote failure")
-	}
-	f.members[req.Workspace][req.PrincipalSubject] = req.Role
-	return &openshellclient.AddWorkspaceMemberResponse{Member: &openshellclient.WorkspaceMember{
-		PrincipalSubject: req.PrincipalSubject, Role: req.Role,
-	}}, nil
-}
-
-func (f *fakeOpenShellServer) RemoveWorkspaceMember(_ context.Context, req *openshellclient.RemoveWorkspaceMemberRequest) (*openshellclient.RemoveWorkspaceMemberResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.calls = append(f.calls, fmt.Sprintf("remove:%s:%s", req.Workspace, req.PrincipalSubject))
-	if f.failRemoveSubject != "" && req.PrincipalSubject == f.failRemoveSubject {
-		return nil, grpcstatus.Error(codes.Unavailable, "simulated remote failure")
-	}
-	removed := false
-	if members := f.members[req.Workspace]; members != nil {
-		if _, ok := members[req.PrincipalSubject]; ok {
-			delete(members, req.PrincipalSubject)
-			removed = true
-		}
-	}
-	return &openshellclient.RemoveWorkspaceMemberResponse{Removed: removed}, nil
-}
-
-func (f *fakeOpenShellServer) ListWorkspaceMembers(_ context.Context, req *openshellclient.ListWorkspaceMembersRequest) (*openshellclient.ListWorkspaceMembersResponse, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	members := make([]*openshellclient.WorkspaceMember, 0, len(f.members[req.Workspace]))
-	for subject, role := range f.members[req.Workspace] {
-		members = append(members, &openshellclient.WorkspaceMember{PrincipalSubject: subject, Role: role})
-	}
-	return &openshellclient.ListWorkspaceMembersResponse{Members: members}, nil
-}
-
-// roleOf looks up a member's role in the "default" workspace -- the only
-// one these tests exercise.
-func (f *fakeOpenShellServer) roleOf(subject string) (openshellclient.WorkspaceRole, bool) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	role, ok := f.members["default"][subject]
-	return role, ok
-}
-
-func (f *fakeOpenShellServer) callLog() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.calls...)
-}
-
-// startFakeGateway starts fakeOpenShellServer on an in-memory bufconn
-// listener and returns a connectClient func wiring the reconciler to it,
-// regardless of which OpenShellGateway CR is passed in.
-func startFakeGateway(server *fakeOpenShellServer) (connectFn func(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (openshellclient.OpenShellClient, func(), error), stop func()) {
-	const bufSize = 1024 * 1024
-	lis := bufconn.Listen(bufSize)
-	grpcServer := grpc.NewServer()
-	openshellclient.RegisterOpenShellServer(grpcServer, server)
-	go func() { _ = grpcServer.Serve(lis) }()
-
-	connectFn = func(ctx context.Context, _ *ogov1alpha1.OpenShellGateway) (openshellclient.OpenShellClient, func(), error) {
-		conn, err := grpc.NewClient("passthrough:///bufnet",
-			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-		)
-		if err != nil {
-			return nil, nil, err
-		}
-		return openshellclient.NewOpenShellClient(conn), func() { _ = conn.Close() }, nil
-	}
-	stop = grpcServer.Stop
-	return connectFn, stop
-}
-
-// generateAuthBridgeKeysSecret returns a Secret shaped like the real
-// <gateway>-auth-bridge-keys Secret the OpenShellGateway controller manages.
-func generateAuthBridgeKeysSecret(name, namespace string) *corev1.Secret {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	Expect(err).NotTo(HaveOccurred())
-	privBytes, err := x509.MarshalPKCS8PrivateKey(key)
-	Expect(err).NotTo(HaveOccurred())
-	signingPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
-
-	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
-		Data:       map[string][]byte{"signing.pem": signingPEM, "kid": []byte("test-kid")},
-	}
-}
 
 var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 	const (
@@ -603,12 +453,3 @@ var _ = Describe("OpenShellWorkspaceMember Controller", func() {
 		Expect(errors.IsNotFound(err)).To(BeTrue())
 	})
 })
-
-func findReadyCondition(conditions []metav1.Condition) *metav1.Condition {
-	for i := range conditions {
-		if conditions[i].Type == "Ready" {
-			return &conditions[i]
-		}
-	}
-	return nil
-}
