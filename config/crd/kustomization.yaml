@@ -5,6 +5,7 @@ resources:
 - bases/gateway.ogo.aknochow.io_openshellgateways.yaml
 - bases/gateway.ogo.aknochow.io_openshellproviders.yaml
 - bases/gateway.ogo.aknochow.io_openshellpolicies.yaml
+- bases/gateway.ogo.aknochow.io_openshellworkspacemembers.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

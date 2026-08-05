@@ -67,9 +67,26 @@ func loadJWTSigner(signingKeyPath, kidPath string) (*JWTSigner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading signing key from %s: %w", signingKeyPath, err)
 	}
+	kid := ""
+	if kidPath != "" {
+		kidBytes, err := os.ReadFile(kidPath)
+		if err == nil {
+			kid = strings.TrimSpace(string(kidBytes))
+		}
+	}
+	return NewJWTSignerFromPEM(signingPEM, kid)
+}
+
+// NewJWTSignerFromPEM builds a JWTSigner directly from PKCS8 RSA private key
+// PEM bytes and a key ID, without touching the filesystem -- for callers
+// (e.g. the OpenShellWorkspaceMember controller) that already hold the key
+// material from a Secret rather than a mounted file. If kid is empty, it's
+// derived from the public key's hash, matching loadJWTSigner's fallback.
+func NewJWTSignerFromPEM(signingPEM []byte, kid string) (*JWTSigner, error) {
+	kid = strings.TrimSpace(kid)
 	block, _ := pem.Decode(signingPEM)
 	if block == nil {
-		return nil, fmt.Errorf("no PEM block found in %s", signingKeyPath)
+		return nil, fmt.Errorf("no PEM block found in signing key")
 	}
 	key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
@@ -80,13 +97,6 @@ func loadJWTSigner(signingKeyPath, kidPath string) (*JWTSigner, error) {
 		return nil, fmt.Errorf("signing key is not RSA")
 	}
 
-	kid := ""
-	if kidPath != "" {
-		kidBytes, err := os.ReadFile(kidPath)
-		if err == nil {
-			kid = strings.TrimSpace(string(kidBytes))
-		}
-	}
 	if kid == "" {
 		pubBytes := x509.MarshalPKCS1PublicKey(&rsaKey.PublicKey)
 		hash := sha256.Sum256(pubBytes)

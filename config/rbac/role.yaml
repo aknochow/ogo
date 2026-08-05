@@ -122,6 +122,7 @@ rules:
   - openshellgateways
   - openshellpolicies
   - openshellproviders
+  - openshellworkspacemembers
   verbs:
   - create
   - delete
@@ -136,6 +137,7 @@ rules:
   - openshellgateways/finalizers
   - openshellpolicies/finalizers
   - openshellproviders/finalizers
+  - openshellworkspacemembers/finalizers
   verbs:
   - update
 - apiGroups:
@@ -144,6 +146,7 @@ rules:
   - openshellgateways/status
   - openshellpolicies/status
   - openshellproviders/status
+  - openshellworkspacemembers/status
   verbs:
   - get
   - patch
