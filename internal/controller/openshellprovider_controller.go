@@ -105,7 +105,11 @@ func (r *OpenShellProviderReconciler) reconcileSync(ctx context.Context, provide
 	}
 
 	desiredCredentials := make(map[string]string, len(provider.Spec.Credentials))
-	for envVar, secretRef := range provider.Spec.Credentials {
+	// Sorted so that if multiple credential refs are broken at once, which
+	// one is reported is deterministic across reconciles instead of
+	// depending on Go's randomized map iteration order.
+	for _, envVar := range slices.Sorted(maps.Keys(provider.Spec.Credentials)) {
+		secretRef := provider.Spec.Credentials[envVar]
 		secret := &corev1.Secret{}
 		err := r.Get(ctx, types.NamespacedName{Name: secretRef.Name, Namespace: provider.Namespace}, secret)
 		if err != nil {

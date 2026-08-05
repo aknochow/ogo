@@ -406,4 +406,39 @@ var _ = Describe("OpenShellProvider Controller", func() {
 		Expect(ready).NotTo(BeNil())
 		Expect(ready.Reason).To(Equal("KeyNotFound"))
 	})
+
+	It("deterministically reports the alphabetically-first broken credential ref", func() {
+		// Regression test: credential refs are validated in sorted key
+		// order specifically so that when multiple are broken at once,
+		// which one is reported doesn't depend on Go's randomized map
+		// iteration order.
+		provider := &ogov1alpha1.OpenShellProvider{
+			ObjectMeta: metav1.ObjectMeta{Name: "multi-broken", Namespace: provNamespace},
+			Spec: ogov1alpha1.OpenShellProviderSpec{
+				ProviderType: "custom",
+				Credentials: map[string]ogov1alpha1.SecretKeyRef{
+					"ZZZ_KEY": {Name: "does-not-exist-z", Key: "k"},
+					"AAA_KEY": {Name: "does-not-exist-a", Key: "k"},
+					"MMM_KEY": {Name: "does-not-exist-m", Key: "k"},
+				},
+			},
+		}
+		Expect(k8sClient.Create(ctx, provider)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, provider) }()
+
+		r := reconciler()
+		key := types.NamespacedName{Name: provider.Name, Namespace: provNamespace}
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+
+		for i := 0; i < 5; i++ {
+			_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: key})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, key, provider)).To(Succeed())
+			ready := findSyncedCondition(provider.Status.Conditions)
+			Expect(ready).NotTo(BeNil())
+			Expect(ready.Reason).To(Equal("SecretNotFound"))
+			Expect(ready.Message).To(ContainSubstring("AAA_KEY"), "AAA_KEY sorts first and must always be the one reported")
+		}
+	})
 })

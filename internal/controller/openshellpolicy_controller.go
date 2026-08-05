@@ -168,7 +168,7 @@ func (r *OpenShellPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 func (r *OpenShellPolicyReconciler) reconcileSync(ctx context.Context, policy *ogov1alpha1.OpenShellPolicy) (ctrl.Result, error) {
 	active, err := resolveActivePolicy(ctx, r.Client)
 	if err != nil {
-		return ctrl.Result{}, err
+		return r.setNotReady(ctx, policy, "PolicyListFailed", err)
 	}
 	if active.UID != policy.UID {
 		meta.SetStatusCondition(&policy.Status.Conditions, metav1.Condition{
