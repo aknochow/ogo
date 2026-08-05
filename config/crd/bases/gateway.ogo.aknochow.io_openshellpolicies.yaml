@@ -166,6 +166,15 @@ spec:
           status:
             description: OpenShellPolicyStatus defines the observed state of the policy.
             properties:
+              appliedToGateway:
+                description: |-
+                  AppliedToGateway is true once this CR has successfully pushed its
+                  policy as the gateway's global policy. Only one OpenShellPolicy CR can
+                  be active at a time (oldest-wins); this field lets the finalizer tell
+                  "I was the active singleton and must retract my policy from the
+                  gateway" apart from "I was always superseded and must not touch
+                  gateway state at all" on deletion.
+                type: boolean
               conditions:
                 description: Conditions represent the latest available observations.
                 items:
@@ -232,11 +241,16 @@ spec:
                 format: int64
                 type: integer
               phase:
-                description: Phase is the current lifecycle phase.
+                description: |-
+                  Phase is the current lifecycle phase. Superseded means another
+                  OpenShellPolicy CR is the active gateway-global policy; this
+                  resource's spec has no effect on the gateway while true (see
+                  AppliedToGateway).
                 enum:
                 - Pending
                 - Synced
                 - Failed
+                - Superseded
                 type: string
             type: object
         type: object

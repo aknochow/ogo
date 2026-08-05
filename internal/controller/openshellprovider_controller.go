@@ -19,7 +19,11 @@ package controller
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
+	"google.golang.org/grpc/codes"
+	grpcstatus "google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -29,82 +33,250 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
+	"github.com/aknochow/ogo/internal/openshellclient"
 )
 
+const providerFinalizer = "ogo.aknochow.io/provider-cleanup"
+
+// OpenShellProviderReconciler reconciles OpenShellProvider objects by
+// pushing their credentials/config to the OpenShell gateway via its
+// CreateProvider/UpdateProvider/DeleteProvider gRPC RPCs.
 type OpenShellProviderReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// connectClient constructs a client for the gateway's gRPC API and a func
+	// to release it. See gatewayClient/dialConnectClient (openshell_grpc.go);
+	// tests override it to point at an in-process fake server.
+	connectClient gatewayConnectFunc
+}
+
+// gatewayProviderName derives the gateway-side Provider name deterministically
+// from the CR's namespace and name. OpenShellProvider is namespace-scoped,
+// but the gateway addresses Provider objects only by (workspace, name) --
+// workspace is always defaultOpenShellWorkspace. Using the CR's bare name
+// would let two CRs of the same name in different k8s namespaces collide on
+// the gateway and silently overwrite each other's credentials via the
+// AlreadyExists->Update fallback below.
+func gatewayProviderName(p *ogov1alpha1.OpenShellProvider) string {
+	return p.Namespace + "." + p.Name
 }
 
 // +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellproviders,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellproviders/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.ogo.aknochow.io,resources=openshellproviders/finalizers,verbs=update
 
+// Reconcile ensures the credentials/config described by an OpenShellProvider
+// CR match the remote gateway state.
 func (r *OpenShellProviderReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logf.FromContext(ctx)
-
 	provider := &ogov1alpha1.OpenShellProvider{}
 	if err := r.Get(ctx, req.NamespacedName, provider); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	gwList := &ogov1alpha1.OpenShellGatewayList{}
-	if err := r.List(ctx, gwList); err != nil {
-		return ctrl.Result{}, err
-	}
-	if len(gwList.Items) == 0 {
-		meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
-			Type: "Synced", Status: metav1.ConditionFalse,
-			Reason: "NoGateway", Message: "No OpenShellGateway found in the cluster",
-		})
-		provider.Status.Phase = "Pending"
-		return ctrl.Result{}, r.Status().Update(ctx, provider)
+	if !provider.DeletionTimestamp.IsZero() {
+		return r.reconcileDelete(ctx, provider)
 	}
 
-	for envVar, secretRef := range provider.Spec.Credentials {
+	if !controllerutil.ContainsFinalizer(provider, providerFinalizer) {
+		controllerutil.AddFinalizer(provider, providerFinalizer)
+		if err := r.Update(ctx, provider); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{Requeue: true}, nil
+	}
+
+	return r.reconcileSync(ctx, provider)
+}
+
+// reconcileSync resolves the gateway and the referenced Secrets, then
+// reconciles the provider's credentials/config to match spec.
+func (r *OpenShellProviderReconciler) reconcileSync(ctx context.Context, provider *ogov1alpha1.OpenShellProvider) (ctrl.Result, error) {
+	gw, err := resolveGateway(ctx, r.Client)
+	if err != nil {
+		return r.setNotReady(ctx, provider, "GatewayNotFound", err)
+	}
+
+	desiredCredentials := make(map[string]string, len(provider.Spec.Credentials))
+	// Sorted so that if multiple credential refs are broken at once, which
+	// one is reported is deterministic across reconciles instead of
+	// depending on Go's randomized map iteration order.
+	for _, envVar := range slices.Sorted(maps.Keys(provider.Spec.Credentials)) {
+		secretRef := provider.Spec.Credentials[envVar]
 		secret := &corev1.Secret{}
-		err := r.Get(ctx, types.NamespacedName{
-			Name:      secretRef.Name,
-			Namespace: req.Namespace,
-		}, secret)
+		err := r.Get(ctx, types.NamespacedName{Name: secretRef.Name, Namespace: provider.Namespace}, secret)
 		if err != nil {
 			if apierrors.IsNotFound(err) {
-				meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
-					Type: "Synced", Status: metav1.ConditionFalse,
-					Reason: "SecretNotFound", Message: fmt.Sprintf("Secret %q for credential %q not found", secretRef.Name, envVar),
-				})
-				provider.Status.Phase = phaseFailed
-				return ctrl.Result{}, r.Status().Update(ctx, provider)
+				return r.setNotReady(ctx, provider, "SecretNotFound",
+					fmt.Errorf("secret %q for credential %q not found", secretRef.Name, envVar))
 			}
 			return ctrl.Result{}, err
 		}
-		if _, ok := secret.Data[secretRef.Key]; !ok {
-			meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
-				Type: "Synced", Status: metav1.ConditionFalse,
-				Reason: "KeyNotFound", Message: fmt.Sprintf("Key %q not found in Secret %q", secretRef.Key, secretRef.Name),
-			})
-			provider.Status.Phase = phaseFailed
-			return ctrl.Result{}, r.Status().Update(ctx, provider)
+		value, ok := secret.Data[secretRef.Key]
+		if !ok {
+			return r.setNotReady(ctx, provider, "KeyNotFound",
+				fmt.Errorf("key %q not found in Secret %q", secretRef.Key, secretRef.Name))
+		}
+		desiredCredentials[envVar] = string(value)
+	}
+	desiredConfig := maps.Clone(provider.Spec.Config)
+	if desiredConfig == nil {
+		desiredConfig = map[string]string{}
+	}
+
+	// The gateway's credentials/config maps are upsert-or-leave-untouched on
+	// update: a key with a non-empty value is set, a key omitted entirely is
+	// left unchanged server-side. A key removed from spec (or whose backing
+	// Secret key disappeared) must be explicitly retracted with an
+	// empty-string value here, or it silently persists on the gateway
+	// forever. Track this against the *desired* key sets computed above --
+	// status is only updated to those sets on success, further down.
+	payloadCredentials := maps.Clone(desiredCredentials)
+	for _, key := range provider.Status.ReconciledCredentialKeys {
+		if _, ok := desiredCredentials[key]; !ok {
+			payloadCredentials[key] = ""
+		}
+	}
+	payloadConfig := maps.Clone(desiredConfig)
+	for _, key := range provider.Status.ReconciledConfigKeys {
+		if _, ok := desiredConfig[key]; !ok {
+			payloadConfig[key] = ""
 		}
 	}
 
-	log.Info("Provider credentials validated", "provider", provider.Spec.ProviderType,
-		"credentials", len(provider.Spec.Credentials))
+	rpcCtx, wsClient, closeFn, err := gatewayClient(ctx, r.Client, r.connectClient, gw)
+	if err != nil {
+		return r.setNotReady(ctx, provider, "GatewayUnreachable", fmt.Errorf("connecting to gateway: %w", err))
+	}
+	defer closeFn()
 
-	meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
-		Type: "Synced", Status: metav1.ConditionTrue,
-		Reason: "Ready", Message: "Provider credentials validated",
+	name := gatewayProviderName(provider)
+	desired := &openshellclient.Provider{
+		Metadata:    &openshellclient.ObjectMeta{Name: name},
+		Type:        provider.Spec.ProviderType,
+		Credentials: payloadCredentials,
+		Config:      payloadConfig,
+	}
+
+	_, err = wsClient.CreateProvider(rpcCtx, &openshellclient.CreateProviderRequest{
+		Provider: desired, Workspace: defaultOpenShellWorkspace,
 	})
+	if err != nil {
+		switch grpcstatus.Code(err) {
+		case codes.AlreadyExists:
+			_, err = wsClient.UpdateProvider(rpcCtx, &openshellclient.UpdateProviderRequest{
+				Provider: desired, Workspace: defaultOpenShellWorkspace,
+			})
+			if err != nil {
+				if grpcstatus.Code(err) == codes.InvalidArgument {
+					return r.setNotReady(ctx, provider, "InvalidProviderSpec", err)
+				}
+				return r.setNotReady(ctx, provider, "GatewayUnreachable", fmt.Errorf("UpdateProvider: %w", err))
+			}
+		case codes.InvalidArgument:
+			return r.setNotReady(ctx, provider, "InvalidProviderSpec", err)
+		default:
+			return r.setNotReady(ctx, provider, "GatewayUnreachable", fmt.Errorf("CreateProvider: %w", err))
+		}
+	}
+
+	provider.Status.ReconciledCredentialKeys = slices.Sorted(maps.Keys(desiredCredentials))
+	provider.Status.ReconciledConfigKeys = slices.Sorted(maps.Keys(desiredConfig))
 	provider.Status.Phase = "Synced"
 	provider.Status.ObservedGeneration = provider.Generation
+	meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
+		Type: "Synced", Status: metav1.ConditionTrue, Reason: "Ready",
+		Message: fmt.Sprintf("Provider %q of type %q is synced to the gateway", provider.Name, provider.Spec.ProviderType),
+	})
+	return ctrl.Result{RequeueAfter: requeueInterval}, r.Status().Update(ctx, provider)
+}
 
-	return ctrl.Result{}, r.Status().Update(ctx, provider)
+// reconcileDelete removes the provider from the gateway before allowing the
+// finalizer to be dropped and the CR to be deleted.
+func (r *OpenShellProviderReconciler) reconcileDelete(ctx context.Context, provider *ogov1alpha1.OpenShellProvider) (ctrl.Result, error) {
+	log := logf.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(provider, providerFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	gw, err := resolveGateway(ctx, r.Client)
+	if err != nil {
+		// Don't drop the finalizer here -- that would permanently orphan the
+		// remote provider if the gateway is only temporarily unreachable.
+		log.Error(err, "no gateway found during cleanup, will retry")
+		return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
+	}
+
+	rpcCtx, wsClient, closeFn, err := gatewayClient(ctx, r.Client, r.connectClient, gw)
+	if err != nil {
+		log.Error(err, "failed to connect to gateway during cleanup, will retry")
+		return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
+	}
+	defer closeFn()
+
+	_, err = wsClient.DeleteProvider(rpcCtx, &openshellclient.DeleteProviderRequest{
+		Name: gatewayProviderName(provider), Workspace: defaultOpenShellWorkspace,
+	})
+	if err != nil {
+		if grpcstatus.Code(err) == codes.FailedPrecondition {
+			// The provider is still attached to one or more sandboxes -- the
+			// gateway refuses to delete it. Don't drop the finalizer; this
+			// needs the sandbox(es) detached first, not a retry of the same
+			// call. The real error names the attached sandbox(es) by name --
+			// that's information about a different resource than this CR,
+			// which anyone with read access to this Provider may not have
+			// access to; log it server-side only.
+			log.Error(err, "gateway refused provider deletion")
+			meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
+				Type: "Synced", Status: metav1.ConditionFalse, Reason: "DeletionBlocked",
+				Message: "provider cannot be deleted while still attached to one or more sandboxes; see operator logs for details",
+			})
+			provider.Status.Phase = phaseFailed
+			if updErr := r.Status().Update(ctx, provider); updErr != nil {
+				return ctrl.Result{}, updErr
+			}
+			return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
+		}
+		log.Error(err, "failed to delete provider on gateway, will retry")
+		return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
+	}
+
+	controllerutil.RemoveFinalizer(provider, providerFinalizer)
+	return ctrl.Result{}, r.Update(ctx, provider)
+}
+
+// setNotReady records a Synced=False condition and a Failed phase. For
+// GatewayUnreachable and InvalidProviderSpec, the underlying cause -- a raw
+// gateway gRPC error, which can echo back gateway-internal detail -- is
+// logged server-side only; the CR's status, readable by anyone with get
+// access to it, gets a generic message instead.
+func (r *OpenShellProviderReconciler) setNotReady(ctx context.Context, provider *ogov1alpha1.OpenShellProvider, reason string, cause error) (ctrl.Result, error) {
+	message := cause.Error()
+	switch reason {
+	case "GatewayUnreachable":
+		logf.FromContext(ctx).Error(cause, "gateway unreachable while reconciling provider")
+		message = "failed to reach the OpenShell gateway; see operator logs for details"
+	case "InvalidProviderSpec":
+		logf.FromContext(ctx).Error(cause, "gateway rejected provider spec")
+		message = "the gateway rejected this provider's spec; see operator logs for details"
+	}
+	meta.SetStatusCondition(&provider.Status.Conditions, metav1.Condition{
+		Type: "Synced", Status: metav1.ConditionFalse, Reason: reason, Message: message,
+	})
+	provider.Status.Phase = phaseFailed
+	provider.Status.ObservedGeneration = provider.Generation
+	if err := r.Status().Update(ctx, provider); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
 }
 
 func (r *OpenShellProviderReconciler) SetupWithManager(mgr ctrl.Manager) error {
