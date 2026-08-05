@@ -197,11 +197,11 @@ func (r *OpenShellWorkspaceMemberReconciler) reconcileDelete(ctx context.Context
 			// reconcileDelete, which also retries indefinitely rather than
 			// giving up on external cleanup.
 			log.Error(err, "no gateway found during cleanup, will retry")
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
 		}
 		if err := r.removeMember(ctx, gw, wm.Spec.Workspace, wm.Status.ReconciledSubject); err != nil {
 			log.Error(err, "failed to remove workspace membership on delete, will retry")
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
 		}
 	}
 
@@ -228,7 +228,7 @@ func (r *OpenShellWorkspaceMemberReconciler) setNotReady(ctx context.Context, wm
 	if err := r.Status().Update(ctx, wm); err != nil {
 		return ctrl.Result{}, err
 	}
-	return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	return ctrl.Result{RequeueAfter: gatewayRetryInterval}, nil
 }
 
 func workspaceRoleFromSpec(role string) openshellclient.WorkspaceRole {

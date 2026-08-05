@@ -60,6 +60,24 @@ type OpenShellProviderStatus struct {
 	// +listType=map
 	// +listMapKey=type
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ReconciledCredentialKeys is the set of spec.credentials keys last
+	// successfully pushed to the gateway. Diffed against the current desired
+	// key set each reconcile so a key removed from spec.credentials (or
+	// whose backing Secret key is deleted) is explicitly retracted with an
+	// empty-string value on the next update -- the gateway's credentials map
+	// has upsert-or-leave-untouched semantics, never clear-on-omit, so
+	// omitting a removed key would silently leave it live on the gateway
+	// forever.
+	// +listType=set
+	// +optional
+	ReconciledCredentialKeys []string `json:"reconciledCredentialKeys,omitempty"`
+
+	// ReconciledConfigKeys is the analogous tracking set for spec.config,
+	// which has the identical merge/retraction semantics as credentials.
+	// +listType=set
+	// +optional
+	ReconciledConfigKeys []string `json:"reconciledConfigKeys,omitempty"`
 }
 
 // +kubebuilder:object:root=true

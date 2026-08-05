@@ -59,6 +59,17 @@ const (
 
 	// gatewayGRPCPort is the gateway's in-cluster gRPC listener port.
 	gatewayGRPCPort = 8080
+
+	// defaultOpenShellWorkspace is the gateway's own default workspace,
+	// auto-seeded server-side at gateway startup. OGO is a single-tenant,
+	// single-workspace deployment today -- every gRPC call that takes a
+	// workspace argument uses this constant.
+	defaultOpenShellWorkspace = "default"
+
+	// gatewayRetryInterval is the shared backoff used when a gateway gRPC
+	// call fails transiently (unreachable, temporarily blocked) across the
+	// controllers that talk to it.
+	gatewayRetryInterval = 30 * time.Second
 )
 
 // gatewayConnectFunc constructs a client for the gateway's gRPC API and a
