@@ -45,6 +45,26 @@ oc get secret openshell-client-tls -n ogo -o jsonpath='{.data.tls\.crt}' | base6
 oc get secret openshell-client-tls -n ogo -o jsonpath='{.data.tls\.key}' | base64 -d > client.key
 ```
 
+### TLS trust for OIDC and bearer-token clients
+
+Clients that authenticate with an OIDC or bearer token still need to trust
+the gateway's server certificate to connect over TLS, but they should not
+need access to a Secret that also carries client mTLS credentials. OGO
+publishes the gateway's public CA chain — no private key, no client cert —
+in the `{gateway}-gateway-ca` ConfigMap whenever `spec.tls.enabled` is true,
+independent of whether the auth bridge is enabled.
+
+```bash
+oc get configmap openshell-gateway-ca -n ogo -o jsonpath='{.data.ca\.crt}' > ca.crt
+```
+
+This is a separate resource from `{gateway}-auth-ca`, which the auth bridge
+publishes for its own HTTPS listener (see
+[Internal workload clients](../guides/openshift-sso.md#internal-workload-clients)).
+Both currently carry the same CA, since the auth bridge shares the gateway's
+server TLS Secret, but they serve different client audiences and are
+reconciled independently.
+
 ## Sandbox bootstrap
 
 When a sandbox pod starts, the supervisor process inside it must
