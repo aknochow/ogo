@@ -48,6 +48,14 @@ Browser SSO requires `spec.route.enabled` to be true and an explicit
 hostname. With routing disabled, use the internal HTTPS Service for headless
 token exchange instead; no browser callback is available.
 
+If browser SSO and routing are both enabled but `spec.route.hostname` is
+left empty, OGO does not create the auth Route or `OAuthClient` — a
+router-assigned host isn't known until after the Route exists, so there is
+nothing stable to register as the OAuth redirect URI. The gateway reports
+`Available: False` with a `BrowserSSOReady` condition
+(`Reason: HostnameMissing`) instead of silently registering a redirect that
+can't work. Headless (mTLS/ServiceAccount) access is unaffected either way.
+
 ## User group (required)
 
 The `userGroup` field specifies the OpenShift group required for SSO access.
@@ -96,6 +104,27 @@ expires. If the files are temporarily inconsistent during rotation, the bridge
 continues serving the last valid pair until it can load the replacement.
 
 ## Troubleshooting
+
+### Gateway reports `BrowserSSOReady: False, Reason: HostnameMissing`
+
+Browser SSO (`spec.auth.openshift.enabled`) and routing are both enabled,
+but `spec.route.hostname` is empty. Set it explicitly:
+
+```yaml
+spec:
+  route:
+    hostname: openshell.apps.example.com
+```
+
+Or, for headless-only access (mTLS/ServiceAccount, no browser login), disable
+browser SSO instead:
+
+```yaml
+spec:
+  auth:
+    openshift:
+      enabled: false
+```
 
 ### "access denied: you are not a member of the required OpenShift group"
 

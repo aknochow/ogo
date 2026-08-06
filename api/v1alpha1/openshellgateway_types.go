@@ -305,6 +305,7 @@ const (
 	ConditionOpenShiftGroups    = "OpenShiftGroupsReady"
 	ConditionEnvoyProxySCCReady = "EnvoyProxySCCReady"
 	ConditionEnvoyRouteReady    = "EnvoyRouteReady"
+	ConditionBrowserSSOReady    = "BrowserSSOReady"
 )
 
 // Phase values for OpenShellGateway.
