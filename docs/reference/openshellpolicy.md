@@ -8,12 +8,6 @@ tags: [crd, policy, security]
 
 # OpenShellPolicy
 
-> **Warning:** This CRD currently only validates the resource's fields
-> locally. It does not sync network, filesystem, or process rules to the
-> running OpenShell gateway yet. `phase: Synced` reflects validation
-> only, not enforcement. Tracked in
-> [#52](https://github.com/aknochow/ogo/issues/52).
-
 **API Group:** `gateway.ogo.aknochow.io`
 **Version:** `v1alpha1`
 **Scope:** Namespaced (in the gateway namespace)

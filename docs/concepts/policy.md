@@ -7,15 +7,6 @@ tags: [core, security]
 
 # Policy
 
-> **Warning:** `OpenShellPolicy` currently only validates the resource's
-> fields locally. It does not yet sync network, filesystem, or process
-> rules to the running OpenShell gateway, so creating this resource has
-> no effect on sandbox enforcement. `Synced: True` reflects validation
-> only, not enforcement. Sandboxes always run under the gateway's
-> built-in default policy described below, regardless of any
-> `OpenShellPolicy` CR. Tracked in
-> [#52](https://github.com/aknochow/ogo/issues/52).
-
 Policies define the security boundary for sandbox pods. The `OpenShellPolicy`
 CRD configures three dimensions of control:
 
