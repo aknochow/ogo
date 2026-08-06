@@ -1,0 +1,16 @@
+# OpenShellWorkspaceMember — grant a headless workload identity access
+#
+# Grants the "ci-pipeline" ServiceAccount (in this same namespace) user-role
+# membership in the "default" OpenShell workspace, so it can create and
+# manage sandboxes once it exchanges its Kubernetes token for an OpenShell
+# JWT (see docs/concepts/authentication.md).
+apiVersion: gateway.ogo.aknochow.io/v1alpha1
+kind: OpenShellWorkspaceMember
+metadata:
+  name: ci-pipeline
+  namespace: ogo
+spec:
+  workspace: default
+  serviceAccountRef:
+    name: ci-pipeline
+  role: user
