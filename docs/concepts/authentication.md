@@ -87,3 +87,4 @@ The first authenticator that matches handles the request.
 - [OpenShift SSO guide](../guides/openshift-sso.md)
 - [OpenShellGateway CRD](../reference/openshellgateway.md) - `spec.auth` fields
 - [Gateway concept](gateway.md) - architecture overview
+- [Workspace Membership](workspace-membership.md) - authorization once a token is issued; a valid token alone doesn't grant sandbox access

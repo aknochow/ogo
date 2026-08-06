@@ -59,6 +59,7 @@ img   = "https://img.shields.io/badge/OpenShell-v0.0.96-76b900?logo=nvidia&logoC
   { "Authentication" = "concepts/authentication.md" },
   { "Provider" = "concepts/provider.md" },
   { "Policy" = "concepts/policy.md" },
+  { "Workspace Membership" = "concepts/workspace-membership.md" },
 ]
 
 [[project.nav]]
@@ -77,6 +78,7 @@ img   = "https://img.shields.io/badge/OpenShell-v0.0.96-76b900?logo=nvidia&logoC
   { "OpenShellGateway" = "reference/openshellgateway.md" },
   { "OpenShellProvider" = "reference/openshellprovider.md" },
   { "OpenShellPolicy" = "reference/openshellpolicy.md" },
+  { "OpenShellWorkspaceMember" = "reference/openshellworkspacemember.md" },
 ]
 
 [[project.nav]]

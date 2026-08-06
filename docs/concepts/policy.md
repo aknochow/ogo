@@ -42,6 +42,18 @@ Controls the identity of processes inside the sandbox:
 - `runAsUser` - the user name or UID (default: `sandbox`)
 - `runAsGroup` - the group name or GID (default: `sandbox`)
 
+## Singleton
+
+The OpenShell gateway has exactly one global policy — there's no concept of
+multiple named policies at the gateway level. Only **one** `OpenShellPolicy`
+CR is ever active at a time; if you create more than one, the oldest wins and
+the rest sit idle with `status.phase: Superseded`, having no effect on the
+gateway. `spec.policyName` is a cosmetic label for humans, not something the
+gateway looks up by name.
+
+Deleting the active CR promotes the next-oldest one automatically. Deleting
+the last remaining CR reverts the gateway to its restrictive default below.
+
 ## Default policy
 
 When no `OpenShellPolicy` is configured, the gateway applies a restrictive
