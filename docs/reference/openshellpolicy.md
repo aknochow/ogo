@@ -12,11 +12,22 @@ tags: [crd, policy, security]
 **Version:** `v1alpha1`
 **Scope:** Namespaced (in the gateway namespace)
 
+## Singleton
+
+The OpenShell gateway has exactly one global policy, not named policy
+objects — so only **one** `OpenShellPolicy` CR is ever active at a time.
+The oldest CR (by creation timestamp) wins and reconciles the gateway's
+global policy; any other `OpenShellPolicy` CRs are `Superseded` and have
+**no effect on the gateway** while a different CR is active. Deleting the
+active CR promotes the next-oldest one automatically. Deleting the last
+remaining CR reverts the gateway to its [restrictive default
+policy](#default-policy).
+
 ## Spec
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `policyName` | string | yes | Name of the policy in the gateway |
+| `policyName` | string | yes | Cosmetic label only — the gateway has no named policy objects, so this has no effect on gateway behavior |
 | `filesystem` | FilesystemPolicy | | Filesystem access controls |
 | `network` | map[string]NetworkPolicyRule | | Network access rules keyed by name |
 | `process` | ProcessPolicy | | Process identity controls |
@@ -64,9 +75,10 @@ tags: [crd, policy, security]
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `phase` | enum | `Pending`, `Synced`, `Failed` |
+| `phase` | enum | `Pending`, `Synced`, `Failed`, `Superseded` (see [Singleton](#singleton)) |
 | `observedGeneration` | int | Latest observed spec generation |
 | `conditions` | []Condition | Sync status conditions |
+| `appliedToGateway` | bool | True once this CR has successfully pushed its policy as the gateway's active global policy |
 
 ## Default policy
 

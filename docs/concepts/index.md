@@ -12,3 +12,4 @@ description: Core building blocks of an OGO deployment.
 - [Authentication](authentication.md) - how users and sandboxes authenticate
 - [Provider](provider.md) - API credentials injected into sandboxes
 - [Policy](policy.md) - network, filesystem, and process controls for sandboxes
+- [Workspace Membership](workspace-membership.md) - authorization for workload identities

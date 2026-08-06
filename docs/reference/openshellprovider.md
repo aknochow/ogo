@@ -34,6 +34,8 @@ tags: [crd, provider, credentials]
 | `phase` | enum | `Pending`, `Synced`, `Failed` |
 | `observedGeneration` | int | Latest observed spec generation |
 | `conditions` | []Condition | Sync status conditions |
+| `reconciledCredentialKeys` | []string | `credentials` keys last pushed to the gateway — used to explicitly retract a key removed from spec |
+| `reconciledConfigKeys` | []string | `config` keys last pushed to the gateway — same retraction purpose as above |
 
 ## Provider types
 

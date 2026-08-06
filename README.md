@@ -64,6 +64,7 @@ CRD specifications and field-level documentation.
 - [OpenShellGateway](docs/reference/openshellgateway.md) - gateway CRD reference
 - [OpenShellProvider](docs/reference/openshellprovider.md) - provider CRD reference
 - [OpenShellPolicy](docs/reference/openshellpolicy.md) - policy CRD reference
+- [OpenShellWorkspaceMember](docs/reference/openshellworkspacemember.md) - workspace membership CRD reference
 
 ## Examples
 
