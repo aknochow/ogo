@@ -7,13 +7,6 @@ tags: [core, credentials]
 
 # Provider
 
-> **Warning:** `OpenShellProvider` currently only validates that the
-> referenced Secret and key exist. It does not yet sync credentials or
-> configuration to the running OpenShell gateway, so creating this
-> resource has no effect on sandbox behavior. `Synced: True` reflects
-> validation only, not enforcement. Tracked in
-> [#51](https://github.com/aknochow/ogo/issues/51).
-
 A provider represents an external service that sandboxes need access to -
 an LLM inference API, a source control platform, or a cloud service. The
 `OpenShellProvider` CRD tells the operator which credentials to inject and
