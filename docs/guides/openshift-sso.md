@@ -71,6 +71,11 @@ Gateway Service on port 8085. OGO publishes the verification certificate
 without private keys in the `<gateway>-auth-ca` ConfigMap in the gateway
 namespace.
 
+This ConfigMap is specific to the auth bridge's HTTPS listener. Clients
+connecting to the gateway's own gRPC listener with an OIDC or bearer token
+instead should use `<gateway>-gateway-ca` — see
+[TLS trust for OIDC and bearer-token clients](../concepts/authentication.md#tls-trust-for-oidc-and-bearer-token-clients).
+
 A workload in that namespace can mount the ConfigMap directly. For a
 workload in another namespace, copy only `ca.crt` into a ConfigMap in the
 workload namespace and mount that copy. The client can then verify the
