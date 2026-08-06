@@ -378,6 +378,54 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		Expect(configMap.Data["ca.crt"]).To(Equal("external-ca-data"))
 	})
 
+	It("should publish the gateway CA ConfigMap whenever TLS is enabled, independent of the auth bridge", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+
+		ca := &corev1.ConfigMap{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-gateway-ca", Namespace: "ogo-test"}, ca)).To(Succeed())
+		Expect(ca.Data).To(HaveLen(1))
+		Expect(ca.Data["ca.crt"]).NotTo(BeEmpty())
+
+		// The auth bridge is not enabled on this fixture (non-OpenShift
+		// discovery, Auth.OpenShift.Enabled unset) — -gateway-ca must exist
+		// regardless, since it gates on TLS alone, not on the auth bridge.
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-auth-ca", Namespace: "ogo-test"}, &corev1.ConfigMap{})
+		Expect(errors.IsNotFound(err)).To(BeTrue())
+
+		ca.BinaryData = map[string][]byte{"tls.key": []byte("drift")}
+		Expect(k8sClient.Update(ctx, ca)).To(Succeed())
+		Expect(r.reconcileGatewayCA(ctx, gw)).To(Succeed())
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-gateway-ca", Namespace: "ogo-test"}, ca)).To(Succeed())
+		Expect(ca.BinaryData).To(BeEmpty())
+
+		gw.Spec.TLS.Enabled = ptr.To(false)
+		Expect(r.reconcileGatewayCA(ctx, gw)).To(Succeed())
+		Expect(errors.IsNotFound(k8sClient.Get(ctx,
+			types.NamespacedName{Name: gwName + "-gateway-ca", Namespace: "ogo-test"}, &corev1.ConfigMap{}))).To(BeTrue())
+	})
+
+	It("should reject takeover of an unmanaged gateway CA ConfigMap", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+
+		unmanaged := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+			Name: gwName + "-gateway-ca", Namespace: "ogo-test",
+		}}
+		Expect(k8sClient.Create(ctx, unmanaged)).To(Succeed())
+		defer func() { _ = k8sClient.Delete(ctx, unmanaged) }()
+
+		err := r.reconcileGatewayCA(ctx, gw)
+		Expect(err).To(MatchError(ContainSubstring("not managed by OGO")))
+	})
+
 	It("should set status URL from route hostname", func() {
 		r := reconciler()
 		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
@@ -553,6 +601,11 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		err = k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-node-reader"}, cr)
 		Expect(errors.IsNotFound(err)).To(BeTrue())
 		err = k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-auth-ca", Namespace: "ogo-test"}, &corev1.ConfigMap{})
+		Expect(errors.IsNotFound(err)).To(BeTrue())
+		// -gateway-ca was created for real by the two Reconcile calls above
+		// (TLS defaults to enabled), unlike -auth-ca which needed a manual
+		// fixture since the auth bridge is disabled by default here.
+		err = k8sClient.Get(ctx, types.NamespacedName{Name: gwName + "-gateway-ca", Namespace: "ogo-test"}, &corev1.ConfigMap{})
 		Expect(errors.IsNotFound(err)).To(BeTrue())
 	})
 })
