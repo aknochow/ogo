@@ -248,7 +248,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		})
 		Expect(k8sClient.Status().Update(ctx, gw)).To(Succeed())
 
-		Expect(r.updateStatus(ctx, gw)).To(Succeed())
+		Expect(r.updateStatus(ctx, gw, false)).To(Succeed())
 
 		updated := &ogov1alpha1.OpenShellGateway{}
 		Expect(k8sClient.Get(ctx, gwKey, updated)).To(Succeed())
@@ -285,7 +285,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		})
 		Expect(k8sClient.Status().Update(ctx, gw)).To(Succeed())
 
-		Expect(r.updateStatus(ctx, gw)).To(Succeed())
+		Expect(r.updateStatus(ctx, gw, true)).To(Succeed())
 
 		updated := &ogov1alpha1.OpenShellGateway{}
 		Expect(k8sClient.Get(ctx, gwKey, updated)).To(Succeed())
@@ -298,7 +298,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		// Disabling browser SSO again should clear the stale condition rather
 		// than leaving it to block Available forever.
 		gw.Spec.Auth.OpenShift.Enabled = ptr.To(false)
-		Expect(r.updateStatus(ctx, gw)).To(Succeed())
+		Expect(r.updateStatus(ctx, gw, false)).To(Succeed())
 		Expect(k8sClient.Get(ctx, gwKey, updated)).To(Succeed())
 		Expect(meta.FindStatusCondition(updated.Status.Conditions, ogov1alpha1.ConditionBrowserSSOReady)).To(BeNil())
 	})

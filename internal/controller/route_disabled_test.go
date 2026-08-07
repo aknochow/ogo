@@ -291,7 +291,7 @@ func TestDisabledRouteClearsEnvoyCondition(t *testing.T) {
 		Build()
 	r := &OpenShellGatewayReconciler{Client: fakeClient}
 
-	if err := r.updateStatus(context.Background(), gw); err != nil {
+	if err := r.updateStatus(context.Background(), gw, false); err != nil {
 		t.Fatalf("update status: %v", err)
 	}
 	updated := &ogov1alpha1.OpenShellGateway{}
