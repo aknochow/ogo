@@ -248,7 +248,7 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		})
 		Expect(k8sClient.Status().Update(ctx, gw)).To(Succeed())
 
-		Expect(r.updateStatus(ctx, gw)).To(Succeed())
+		Expect(r.updateStatus(ctx, gw, false)).To(Succeed())
 
 		updated := &ogov1alpha1.OpenShellGateway{}
 		Expect(k8sClient.Get(ctx, gwKey, updated)).To(Succeed())
@@ -257,6 +257,50 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		Expect(available).NotTo(BeNil())
 		Expect(available.Status).To(Equal(metav1.ConditionFalse))
 		Expect(available.Reason).To(Equal("EnvoyRouteNotReady"))
+	})
+
+	It("should not report Available while browser SSO is missing a hostname, even with pods Ready", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		deploy := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, deploy)).To(Succeed())
+		deploy.Status.Replicas = 1
+		deploy.Status.ReadyReplicas = 1
+		Expect(k8sClient.Status().Update(ctx, deploy)).To(Succeed())
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		gw.Spec.Auth.OpenShift.Enabled = ptr.To(true)
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		// Simulates what Reconcile sets when browser SSO and routing are both
+		// enabled but spec.route.hostname is empty (issue #50) - the resource
+		// used to report Available=True/Phase=Running here even though the
+		// OAuth redirect and external issuer had nothing to derive from.
+		meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+			Type: ogov1alpha1.ConditionBrowserSSOReady, Status: metav1.ConditionFalse,
+			Reason: reasonHostnameMissing, Message: "spec.route.hostname is required",
+		})
+		Expect(k8sClient.Status().Update(ctx, gw)).To(Succeed())
+
+		Expect(r.updateStatus(ctx, gw, true)).To(Succeed())
+
+		updated := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, updated)).To(Succeed())
+		Expect(updated.Status.Phase).To(Equal(ogov1alpha1.PhaseCreating))
+		available := meta.FindStatusCondition(updated.Status.Conditions, ogov1alpha1.ConditionAvailable)
+		Expect(available).NotTo(BeNil())
+		Expect(available.Status).To(Equal(metav1.ConditionFalse))
+		Expect(available.Reason).To(Equal(reasonHostnameMissing))
+
+		// Disabling browser SSO again should clear the stale condition rather
+		// than leaving it to block Available forever.
+		gw.Spec.Auth.OpenShift.Enabled = ptr.To(false)
+		Expect(r.updateStatus(ctx, gw, false)).To(Succeed())
+		Expect(k8sClient.Get(ctx, gwKey, updated)).To(Succeed())
+		Expect(meta.FindStatusCondition(updated.Status.Conditions, ogov1alpha1.ConditionBrowserSSOReady)).To(BeNil())
 	})
 
 	It("should create a Service", func() {

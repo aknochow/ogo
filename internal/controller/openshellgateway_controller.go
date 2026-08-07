@@ -71,12 +71,14 @@ const (
 	// while doing nothing" problem #51/#52 were filed for.
 	phaseSuperseded = "Superseded"
 
-	// reasonHostnameMissing is set by both reconcileGatewayAPI and
-	// reconcileEnvoyRoute (each independently checks route.hostname, since
-	// one runs regardless of isOCP and the other only on OpenShift), and
-	// checked again at the reconcileEnvoyRoute call site to avoid
-	// escalating this specific reason to Phase: Failed. A shared constant
-	// keeps those three sites from silently drifting apart.
+	// reasonHostnameMissing is set by reconcileGatewayAPI, reconcileEnvoyRoute,
+	// and the browser-SSO check in Reconcile (each independently checks
+	// route.hostname, since they run under different conditions: one
+	// regardless of isOCP, one only on OpenShift with Gateway API, one only
+	// on OpenShift with the auth bridge enabled), and checked again at the
+	// reconcileEnvoyRoute call site to avoid escalating this specific reason
+	// to Phase: Failed. A shared constant keeps those sites from silently
+	// drifting apart.
 	reasonHostnameMissing = "HostnameMissing"
 )
 
@@ -153,6 +155,7 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	isOCP := openshift.IsOpenShift(r.DiscoveryClient)
 	hasGWAPI := openshift.HasGatewayAPI(r.DiscoveryClient)
 	useGWAPI := gatewayAPIEnabled(gw, hasGWAPI)
+	authEnabled := authBridgeEnabled(gw, isOCP)
 	ns := gatewayNamespace(gw)
 	sandboxNS := sandboxNamespace(gw)
 
@@ -214,48 +217,81 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	}
 
 	if isOCP {
-		authEnabled := authBridgeEnabled(gw, isOCP)
-		if err := r.reconcileObsoleteRoutes(ctx, gw, useGWAPI, authEnabled); err != nil {
-			log.Error(err, "Failed to clean up obsolete Routes")
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "RouteCleanup", err)
-		}
-		if useGWAPI {
-			condition, err := r.reconcileEnvoyRoute(ctx, gw)
-			if condition.Type != "" {
-				meta.SetStatusCondition(&gw.Status.Conditions, condition)
-			}
-			// reconcileEnvoyRoute returns nil for the reasonHostnameMissing
-			// case (an incomplete config waiting on the user, not a
-			// reconcile failure - the condition set above already surfaces
-			// exactly what is missing), so any non-nil error here is a
-			// genuine failure. No special-casing needed at this call site.
-			if err != nil {
-				log.Error(err, "Failed to reconcile Envoy Route")
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "EnvoyRoute", err)
-			}
-		} else {
-			if err := r.reconcileRoute(ctx, gw); err != nil {
-				log.Error(err, "Failed to reconcile Route")
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "Route", err)
-			}
-		}
-		if err := r.reconcileSCCBinding(ctx, gw); err != nil {
-			log.Error(err, "Failed to reconcile SCC binding")
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "SCCBinding", err)
-		}
-		if authEnabled {
-			if err := r.reconcileAuthBridgeRoute(ctx, gw); err != nil {
-				log.Error(err, "Failed to reconcile auth-bridge Route")
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "AuthBridgeRoute", err)
-			}
-			if err := r.reconcileOAuthClient(ctx, gw); err != nil {
-				log.Error(err, "Failed to reconcile OAuthClient")
-				return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, "OAuthClient", err)
-			}
+		if step, err := r.reconcileOpenShiftRouting(ctx, gw, useGWAPI, authEnabled); err != nil {
+			log.Error(err, "Failed to reconcile OpenShift routing", "step", step)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, r.setDegraded(ctx, gw, step, err)
 		}
 	}
 
-	return ctrl.Result{RequeueAfter: requeueInterval}, r.updateStatus(ctx, gw)
+	return ctrl.Result{RequeueAfter: requeueInterval}, r.updateStatus(ctx, gw, authEnabled)
+}
+
+// reconcileOpenShiftRouting reconciles the OpenShift-only Route/SCC/OAuthClient
+// surface (extracted from Reconcile so it's directly unit-testable with a
+// fake client + faked OpenShift discovery, without standing up the full
+// envtest fixture's Phase 1/2 prerequisites). On error, returns the step name
+// that failed so the caller can pass it through to setDegraded unchanged.
+func (r *OpenShellGatewayReconciler) reconcileOpenShiftRouting(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, useGWAPI, authEnabled bool) (string, error) {
+	log := logf.FromContext(ctx)
+
+	if err := r.reconcileObsoleteRoutes(ctx, gw, useGWAPI, authEnabled); err != nil {
+		return "RouteCleanup", err
+	}
+	if useGWAPI {
+		condition, err := r.reconcileEnvoyRoute(ctx, gw)
+		if condition.Type != "" {
+			meta.SetStatusCondition(&gw.Status.Conditions, condition)
+		}
+		// reconcileEnvoyRoute returns nil for the reasonHostnameMissing
+		// case (an incomplete config waiting on the user, not a
+		// reconcile failure - the condition set above already surfaces
+		// exactly what is missing), so any non-nil error here is a
+		// genuine failure. No special-casing needed at this call site.
+		if err != nil {
+			return "EnvoyRoute", err
+		}
+	} else {
+		if err := r.reconcileRoute(ctx, gw); err != nil {
+			return "Route", err
+		}
+	}
+	if err := r.reconcileSCCBinding(ctx, gw); err != nil {
+		return "SCCBinding", err
+	}
+	if authEnabled {
+		if browserSSOMissingHostname(gw, authEnabled) {
+			// Browser SSO needs a stable, known hostname to register as
+			// the OAuth redirect URI and external issuer (see
+			// authBridgeExternalURL) - a router-assigned host isn't
+			// known until after the Route is created, and OGO never
+			// reads it back. Reject the combination here rather than
+			// silently registering an internal cluster URL as the OAuth
+			// redirect, which would report healthy while browser login
+			// cannot complete. Headless (mTLS/ServiceAccount) access is
+			// unaffected. Same "incomplete config waiting on the user,
+			// not a reconcile failure" shape as reasonHostnameMissing's
+			// other two sites.
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type: ogov1alpha1.ConditionBrowserSSOReady, Status: metav1.ConditionFalse,
+				Reason: reasonHostnameMissing,
+				Message: "spec.route.hostname is required when OpenShift browser SSO (spec.auth.openshift.enabled) and routing are both enabled; " +
+					"set it explicitly, or disable browser SSO for headless-only (mTLS/ServiceAccount) access",
+			})
+		} else {
+			meta.SetStatusCondition(&gw.Status.Conditions, metav1.Condition{
+				Type: ogov1alpha1.ConditionBrowserSSOReady, Status: metav1.ConditionTrue,
+				Reason: "Ready", Message: "Browser SSO hostname configured",
+			})
+			if err := r.reconcileAuthBridgeRoute(ctx, gw); err != nil {
+				return "AuthBridgeRoute", err
+			}
+			if err := r.reconcileOAuthClient(ctx, gw); err != nil {
+				return "OAuthClient", err
+			}
+		}
+	}
+	log.V(1).Info("Reconciled OpenShift routing")
+	return "", nil
 }
 
 // --- Deletion ---
@@ -1556,7 +1592,7 @@ func (r *OpenShellGatewayReconciler) reconcileSCCBinding(ctx context.Context, gw
 
 // --- Status ---
 
-func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, authEnabled bool) error {
 	// Re-fetch to avoid conflicts from earlier mutations
 	latest := &ogov1alpha1.OpenShellGateway{}
 	if err := r.Get(ctx, types.NamespacedName{Name: gw.Name}, latest); err != nil {
@@ -1598,8 +1634,43 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		meta.RemoveStatusCondition(&latest.Status.Conditions, ogov1alpha1.ConditionEnvoyRouteReady)
 	}
 
+	// Browser SSO reports its own hostname precondition via
+	// ConditionBrowserSSOReady (set in Reconcile) — fold it into
+	// Available/Phase the same way EnvoyRouteReady is above, so the gateway
+	// doesn't report "Running" while browser login is known to be broken.
+	// authEnabled is passed in from Reconcile rather than re-derived here
+	// (contrast envoyRouteActive above, which re-derives via
+	// openshift.HasGatewayAPI) so there is exactly one place that decides
+	// whether the auth bridge is active per reconcile - re-deriving it here
+	// too would risk the two computations silently drifting apart, and
+	// unconditionally calling openshift.IsOpenShift would panic callers that
+	// invoke updateStatus directly with a nil DiscoveryClient (as this
+	// package's other direct-fake-client tests do).
+	authBridgeActive := authEnabled
+	browserSSOBlocking := false
+	if c := meta.FindStatusCondition(gw.Status.Conditions, ogov1alpha1.ConditionBrowserSSOReady); authBridgeActive && c != nil && c.Status != metav1.ConditionTrue {
+		browserSSOBlocking = true
+	}
+	if !authBridgeActive {
+		meta.RemoveStatusCondition(&latest.Status.Conditions, ogov1alpha1.ConditionBrowserSSOReady)
+	}
+
+	blocking := envoyRouteBlocking || browserSSOBlocking
+	blockedReason, blockedMessage := "EnvoyRouteNotReady", "Waiting for the Envoy Gateway Route to become ready"
+	progressingReason := "Deploying"
+	if browserSSOBlocking {
+		// Takes precedence in the rare case both are blocking simultaneously
+		// — it names a user-actionable config gap rather than a transient
+		// wait, so it's the more useful of the two messages to surface.
+		// progressingReason changes too: unlike EnvoyRouteReady catching up
+		// on its own, a missing hostname never self-resolves, so "Deploying"
+		// would misleadingly suggest an in-progress rollout.
+		blockedReason, blockedMessage = reasonHostnameMissing, "spec.route.hostname is required for OpenShift browser SSO — see the BrowserSSOReady condition"
+		progressingReason = "WaitingForConfig"
+	}
+
 	switch {
-	case podsReady && !envoyRouteBlocking:
+	case podsReady && !blocking:
 		latest.Status.Phase = ogov1alpha1.PhaseRunning
 		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
 			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionTrue,
@@ -1609,15 +1680,15 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 			Type: ogov1alpha1.ConditionProgressing, Status: metav1.ConditionFalse,
 			Reason: "Complete", Message: "Rollout complete",
 		})
-	case podsReady && envoyRouteBlocking:
+	case podsReady && blocking:
 		latest.Status.Phase = ogov1alpha1.PhaseCreating
 		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
 			Type: ogov1alpha1.ConditionAvailable, Status: metav1.ConditionFalse,
-			Reason: "EnvoyRouteNotReady", Message: "Waiting for the Envoy Gateway Route to become ready",
+			Reason: blockedReason, Message: blockedMessage,
 		})
 		meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
 			Type: ogov1alpha1.ConditionProgressing, Status: metav1.ConditionTrue,
-			Reason: "Deploying", Message: "Waiting for the Envoy Gateway Route",
+			Reason: progressingReason, Message: blockedMessage,
 		})
 	default:
 		latest.Status.Phase = ogov1alpha1.PhaseCreating
@@ -1642,8 +1713,12 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		ogov1alpha1.ConditionEnvoyProxySCCReady,
 		ogov1alpha1.ConditionOpenShiftGroups,
 		ogov1alpha1.ConditionEnvoyRouteReady,
+		ogov1alpha1.ConditionBrowserSSOReady,
 	} {
 		if condType == ogov1alpha1.ConditionEnvoyRouteReady && !envoyRouteActive {
+			continue
+		}
+		if condType == ogov1alpha1.ConditionBrowserSSOReady && !authBridgeActive {
 			continue
 		}
 		if c := meta.FindStatusCondition(gw.Status.Conditions, condType); c != nil {
@@ -1786,6 +1861,16 @@ func authBridgeEnabled(gw *ogov1alpha1.OpenShellGateway, isOCP bool) bool {
 		return *gw.Spec.Auth.OpenShift.Enabled
 	}
 	return isOCP
+}
+
+// browserSSOMissingHostname reports whether browser SSO (the auth bridge)
+// and routing are both enabled but no hostname is configured -- the
+// combination issue #50 was filed against, where the OAuth redirect and
+// external issuer can't be derived from a router-assigned host that OGO
+// never reads back. Headless (mTLS/ServiceAccount) access and
+// routing-disabled deployments are unaffected.
+func browserSSOMissingHostname(gw *ogov1alpha1.OpenShellGateway, authEnabled bool) bool {
+	return authEnabled && routeEnabled(gw) && gw.Spec.Route.Hostname == ""
 }
 
 func authBridgeImage(gw *ogov1alpha1.OpenShellGateway) string {
