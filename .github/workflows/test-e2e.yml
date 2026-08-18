@@ -157,6 +157,33 @@ jobs:
           echo "=== All Pods ==="
           kubectl get pods -A 2>/dev/null || true
 
+          echo ""
+          echo "=== crictl-level detail (all pods/containers) ==="
+          # kubectl only ever shows the K8s-level "CreateContainerError"
+          # status, not the underlying CRI-O/OCI runtime error that caused
+          # it -- crictl inspect (run inside the microshift container,
+          # since that's where CRI-O actually lives) surfaces the real
+          # message. Listing everything rather than filtering by name,
+          # since a pod's K8s name isn't the same as its container name
+          # inside CRI-O (a --name filter on the wrong value silently
+          # matches nothing).
+          echo "--- crictl pods -a (sandbox-level) ---"
+          sudo podman exec microshift crictl pods -a 2>&1 || true
+          echo "--- crictl ps -a (container-level) ---"
+          sudo podman exec microshift crictl ps -a 2>&1 || true
+          for cid in $(sudo podman exec microshift crictl ps -a -q 2>/dev/null); do
+            echo "--- inspect $cid ---"
+            sudo podman exec microshift crictl inspect "$cid" 2>&1 | head -100 || true
+          done
+
+          echo ""
+          echo "=== podman info (outer host) ==="
+          sudo podman info 2>&1 || true
+
+          echo ""
+          echo "=== podman info (inner microshift container) ==="
+          sudo podman exec microshift podman info 2>&1 || true
+
       - name: Cleanup
         if: always()
         run: sudo minc delete || true
