@@ -11,3 +11,4 @@ description: Step-by-step walkthroughs for deploying and configuring OGO.
 - [Envoy Gateway](envoy-gateway.md) - gRPC ingress with Let's Encrypt TLS
 - [OpenShift SSO](openshift-sso.md) - "Log in with OpenShift" for the CLI
 - [Dev Spaces](devspaces.md) - create sandboxes from Dev Spaces workspaces
+- [Shared Volumes](shared-volumes.md) - mount existing PVCs into sandboxes for CI/CD and shared datasets

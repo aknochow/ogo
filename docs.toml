@@ -70,6 +70,7 @@ img   = "https://img.shields.io/badge/OpenShell-v0.0.96-76b900?logo=nvidia&logoC
   { "Envoy Gateway" = "guides/envoy-gateway.md" },
   { "OpenShift SSO" = "guides/openshift-sso.md" },
   { "Dev Spaces" = "guides/devspaces.md" },
+  { "Shared Volumes" = "guides/shared-volumes.md" },
 ]
 
 [[project.nav]]
@@ -87,4 +88,5 @@ img   = "https://img.shields.io/badge/OpenShell-v0.0.96-76b900?logo=nvidia&logoC
   { "Claude Code + Anthropic" = "examples/claude-code.md" },
   { "Claude Code + Vertex AI" = "examples/vertex-ai.md" },
   { "Developer Policy" = "examples/developer-policy.md" },
+  { "Tekton Shared Workspace" = "examples/tekton-shared-workspace.md" },
 ]
