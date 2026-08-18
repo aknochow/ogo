@@ -360,12 +360,48 @@ jobs:
         # up. This isolates whether TCP-to-Service routing specifically
         # breaks after that restart, in ~15 seconds instead of waiting out
         # the full suite's Eventually timeout to find out.
+        #
+        # First attempt here used `wget http://...:9154/metrics` against
+        # dns-default (a long-lived Service) and got "Connection reset by
+        # peer" -- that's a completed TCP handshake followed by a reset,
+        # a different failure mode than the real bug's silent timeout, and
+        # likely just a protocol mismatch (that metrics port may expect
+        # TLS). Switched to a protocol-agnostic bare TCP connect (`nc -z`)
+        # against the same long-lived Service, PLUS a second probe against
+        # a Service created fresh in this step (mirroring the real test's
+        # exact sequence: create Service+Pod, wait for the API to report
+        # the endpoint ready, connect immediately) -- kube-proxy syncing
+        # its iptables rules onto the node is a separate, unsynchronized
+        # step from the Endpoints object becoming ready in the API, so a
+        # brand-new Service is the more faithful repro of the real race.
         run: |
+          echo "=== TCP connect to a long-lived Service (dns-default) ==="
           DNS_CLUSTER_IP=$(kubectl get svc dns-default -n openshift-dns -o jsonpath='{.spec.clusterIP}')
           kubectl run tcp-smoke-test --image=busybox:1.36 --restart=Never -- sleep 300
           kubectl wait --for=condition=Ready pod/tcp-smoke-test --timeout=60s
-          kubectl exec tcp-smoke-test -- wget -T 5 -O- "http://${DNS_CLUSTER_IP}:9154/metrics"
+          kubectl exec tcp-smoke-test -- nc -zv -w 5 "${DNS_CLUSTER_IP}" 9154
           kubectl delete pod tcp-smoke-test --now
+
+          echo "=== TCP connect to a freshly created Service (race repro) ==="
+          kubectl run fresh-target --image=nginx:alpine --restart=Never --port=80 --labels=app=fresh-target
+          kubectl expose pod fresh-target --port=80 --name=fresh-target-svc
+          kubectl wait --for=condition=Ready pod/fresh-target --timeout=60s
+          echo "Waiting for the Endpoints API to report the endpoint ready..."
+          for i in $(seq 1 30); do
+            ep=$(kubectl get endpoints fresh-target-svc -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null || true)
+            if [ -n "${ep}" ]; then
+              echo "Endpoint ready per the API: ${ep}"
+              break
+            fi
+            sleep 1
+          done
+          FRESH_CLUSTER_IP=$(kubectl get svc fresh-target-svc -o jsonpath='{.spec.clusterIP}')
+          echo "Connecting immediately to ${FRESH_CLUSTER_IP}:80 (no extra wait, matching the real test's timing)..."
+          kubectl run tcp-smoke-test-fresh --image=busybox:1.36 --restart=Never -- sleep 300
+          kubectl wait --for=condition=Ready pod/tcp-smoke-test-fresh --timeout=60s
+          kubectl exec tcp-smoke-test-fresh -- nc -zv -w 10 "${FRESH_CLUSTER_IP}" 80
+          kubectl delete pod tcp-smoke-test-fresh fresh-target --now
+          kubectl delete svc fresh-target-svc
 
       - name: Run e2e tests
         run: |
@@ -400,6 +436,15 @@ jobs:
           echo "=== CoreDNS/dns-default logs ==="
           kubectl logs -n openshift-dns -l dns.operator.openshift.io/daemonset-dns=default \
             -c dns --tail=100 2>/dev/null || true
+
+          echo ""
+          echo "=== kube-proxy pod status/logs ==="
+          kubectl get pods -n kube-proxy -o wide 2>/dev/null || true
+          kubectl logs -n kube-proxy -l k8s-app=kube-proxy --tail=150 2>/dev/null || true
+
+          echo ""
+          echo "=== iptables KUBE-SVC/KUBE-SEP rules (does kube-proxy have any Service DNAT rules at all?) ==="
+          sudo iptables-save -t nat 2>/dev/null | grep -E 'KUBE-SVC|KUBE-SEP' | head -100 || true
 
       - name: Cleanup
         if: always()
