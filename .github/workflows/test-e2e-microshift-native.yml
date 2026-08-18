@@ -130,8 +130,27 @@ jobs:
 
       - name: Install MicroShift (DEB, native — no nested containers)
         working-directory: microshift-io
+        # install.sh's install_crio()/install_ctl_tools() call `curl -fsSL`
+        # against pkgs.k8s.io with no timeout at all -- if that stalls, the
+        # whole step hangs silently (zero output, since -s suppresses
+        # progress) until the job's 30-minute timeout-minutes kills it,
+        # burning the entire CI budget for nothing. Confirmed happening on
+        # a real run: the step sat with no log output for 15+ minutes.
+        # Bound each attempt with `timeout` so a stall fails fast and
+        # loud, and retry a couple of times since a transient network
+        # blip is the expected failure mode here, not a real bug -- the
+        # script is idempotent (installer functions overwrite their own
+        # apt sources/keyrings and re-run apt-get update/install safely).
         run: |
-          sudo ./src/deb/install.sh /tmp/microshift-debs
+          for attempt in 1 2 3; do
+            echo "=== install.sh attempt ${attempt}/3 ==="
+            if timeout 300 sudo ./src/deb/install.sh /tmp/microshift-debs; then
+              exit 0
+            fi
+            echo "install.sh attempt ${attempt} failed or timed out, retrying..."
+          done
+          echo "install.sh failed after 3 attempts" >&2
+          exit 1
 
       - name: Ensure only the Kindnet CNI config is active
         # Known issue on GitHub Actions runners specifically (matching this
