@@ -141,10 +141,23 @@ jobs:
         # blip is the expected failure mode here, not a real bug -- the
         # script is idempotent (installer functions overwrite their own
         # apt sources/keyrings and re-run apt-get update/install safely).
+        #
+        # First version of this ran `timeout 300 sudo ./install.sh`, which
+        # only kills the `sudo` process itself -- when attempt 1 timed out
+        # mid `apt-get update` (a slow azure.archive.ubuntu.com mirror),
+        # the orphaned apt-get kept running and holding
+        # /var/lib/apt/lists/lock, so both retries failed immediately with
+        # "Could not get lock". Run `timeout` INSIDE the sudo boundary so
+        # it manages the process group as root, add -k to force SIGKILL if
+        # SIGTERM doesn't finish the job, and clear any stale apt locks
+        # before each attempt as defense-in-depth regardless.
         run: |
           for attempt in 1 2 3; do
             echo "=== install.sh attempt ${attempt}/3 ==="
-            if timeout 300 sudo ./src/deb/install.sh /tmp/microshift-debs; then
+            sudo pkill -9 -f 'apt-get|dpkg' 2>/dev/null || true
+            sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+            sudo dpkg --configure -a || true
+            if sudo timeout -k 10 300 ./src/deb/install.sh /tmp/microshift-debs; then
               exit 0
             fi
             echo "install.sh attempt ${attempt} failed or timed out, retrying..."
