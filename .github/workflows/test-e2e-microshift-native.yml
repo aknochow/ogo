@@ -190,6 +190,11 @@ jobs:
             fi
             sleep 1
           done
+          if ! curl -sf http://localhost:5000/v2/ >/dev/null; then
+            echo "ERROR: local registry did not become ready within 30s" >&2
+            docker logs local-registry || true
+            exit 1
+          fi
 
           echo "Configuring CRI-O to trust the local insecure registry..."
           sudo mkdir -p /etc/containers/registries.conf.d
