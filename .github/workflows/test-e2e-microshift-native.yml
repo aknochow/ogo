@@ -361,41 +361,26 @@ jobs:
           echo "=== dns-default Service/Endpoints ==="
           kubectl get svc,endpoints -n openshift-dns 2>&1
 
-      - name: TCP smoke test (post-crio-restart, fail fast before the full suite)
-        # The DNS smoke test earlier in this job (before Setup Go/Build/
-        # Load image) passed -- that's a UDP request to a Service
-        # ClusterIP. The real OGO e2e suite's metrics test does a TCP
-        # connection to a Service ClusterIP and, on a real run, DNS
-        # resolved the hostname fine but the TCP connect itself timed out
-        # ("Operation timed out", not "connection refused" -- a silent
-        # drop, not a rejection) after ~5 minutes. The one thing that
-        # changed in between is the `systemctl restart crio` a few steps
-        # up. This isolates whether TCP-to-Service routing specifically
-        # breaks after that restart, in ~15 seconds instead of waiting out
-        # the full suite's Eventually timeout to find out.
+      - name: Wait for kube-proxy to actually route fresh Services (post-crio-restart)
+        # CONFIRMED root cause via direct reproduction: a bare TCP connect
+        # to a long-lived Service (dns-default) succeeds instantly, but
+        # the exact same connect to a Service created moments earlier --
+        # immediately after the Endpoints API reports it ready, exactly
+        # like the real OGO metrics test's own sequence -- times out. The
+        # Endpoints object becoming "ready" in the API and kube-proxy
+        # actually programming the corresponding iptables DNAT rule on
+        # the node are two unsynchronized steps, and that gap widens
+        # right after `systemctl restart crio` above (dns-default and
+        # service-ca pods were observed restarting in this same window).
         #
-        # First attempt here used `wget http://...:9154/metrics` against
-        # dns-default (a long-lived Service) and got "Connection reset by
-        # peer" -- that's a completed TCP handshake followed by a reset,
-        # a different failure mode than the real bug's silent timeout, and
-        # likely just a protocol mismatch (that metrics port may expect
-        # TLS). Switched to a protocol-agnostic bare TCP connect (`nc -z`)
-        # against the same long-lived Service, PLUS a second probe against
-        # a Service created fresh in this step (mirroring the real test's
-        # exact sequence: create Service+Pod, wait for the API to report
-        # the endpoint ready, connect immediately) -- kube-proxy syncing
-        # its iptables rules onto the node is a separate, unsynchronized
-        # step from the Endpoints object becoming ready in the API, so a
-        # brand-new Service is the more faithful repro of the real race.
+        # The real e2e suite's curl-metrics pod only tries its request
+        # ONCE, so if it lands inside this gap it fails outright rather
+        # than retrying. Rather than patch that into the suite itself,
+        # gate the whole job here: create a throwaway Service+Pod and
+        # retry the TCP connect until it succeeds, so kube-proxy has
+        # actually caught up before any real test creates its own
+        # Services. Cheap (a few seconds normally) and self-cleaning.
         run: |
-          echo "=== TCP connect to a long-lived Service (dns-default) ==="
-          DNS_CLUSTER_IP=$(kubectl get svc dns-default -n openshift-dns -o jsonpath='{.spec.clusterIP}')
-          kubectl run tcp-smoke-test --image=busybox:1.36 --restart=Never -- sleep 300
-          kubectl wait --for=condition=Ready pod/tcp-smoke-test --timeout=60s
-          kubectl exec tcp-smoke-test -- nc -zv -w 5 "${DNS_CLUSTER_IP}" 9154
-          kubectl delete pod tcp-smoke-test --now
-
-          echo "=== TCP connect to a freshly created Service (race repro) ==="
           kubectl run fresh-target --image=nginx:alpine --restart=Never --port=80 --labels=app=fresh-target
           kubectl expose pod fresh-target --port=80 --name=fresh-target-svc
           kubectl wait --for=condition=Ready pod/fresh-target --timeout=60s
@@ -408,13 +393,29 @@ jobs:
             fi
             sleep 1
           done
+
           FRESH_CLUSTER_IP=$(kubectl get svc fresh-target-svc -o jsonpath='{.spec.clusterIP}')
-          echo "Connecting immediately to ${FRESH_CLUSTER_IP}:80 (no extra wait, matching the real test's timing)..."
-          kubectl run tcp-smoke-test-fresh --image=busybox:1.36 --restart=Never -- sleep 300
-          kubectl wait --for=condition=Ready pod/tcp-smoke-test-fresh --timeout=60s
-          kubectl exec tcp-smoke-test-fresh -- nc -zv -w 10 "${FRESH_CLUSTER_IP}" 80
-          kubectl delete pod tcp-smoke-test-fresh fresh-target --now
+          kubectl run tcp-probe --image=busybox:1.36 --restart=Never -- sleep 300
+          kubectl wait --for=condition=Ready pod/tcp-probe --timeout=60s
+
+          echo "Retrying TCP connect to ${FRESH_CLUSTER_IP}:80 until kube-proxy catches up..."
+          success=false
+          for i in $(seq 1 24); do
+            if kubectl exec tcp-probe -- nc -zv -w 3 "${FRESH_CLUSTER_IP}" 80; then
+              echo "kube-proxy is routing fresh Services correctly (took ~${i} attempt(s))"
+              success=true
+              break
+            fi
+            sleep 5
+          done
+
+          kubectl delete pod tcp-probe fresh-target --now
           kubectl delete svc fresh-target-svc
+
+          if [ "${success}" != "true" ]; then
+            echo "kube-proxy never started routing a freshly created Service after 2 minutes of retrying" >&2
+            exit 1
+          fi
 
       - name: Run e2e tests
         run: |
