@@ -128,18 +128,9 @@ jobs:
         # CRIO_VERSION or similar.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          # Excludes lock/partial: apt creates these root:root with
-          # restrictive permissions, and the cache action runs as the
-          # unprivileged runner user, so archiving them fails outright
-          # ("Failed to save: tar ... Permission denied" on a real run).
-          # They're transient anyway, not something worth caching.
           path: |
             /var/cache/apt/archives
-            !/var/cache/apt/archives/lock
-            !/var/cache/apt/archives/partial
             /var/lib/apt/lists
-            !/var/lib/apt/lists/lock
-            !/var/lib/apt/lists/partial
           key: apt-microshift-${{ runner.os }}-${{ hashFiles('microshift-io/src/deb/dependencies.txt') }}
           restore-keys: |
             apt-microshift-${{ runner.os }}-
@@ -250,6 +241,20 @@ jobs:
           done
           echo "install.sh failed after 3 attempts" >&2
           exit 1
+
+      - name: Fix apt cache permissions for the post-job cache save
+        # apt's lock files and partial/ download dirs stay root:root with
+        # restrictive permissions even after a successful install --
+        # actions/cache's post-job save step runs as the unprivileged
+        # runner user, so archiving them failed outright on a real run
+        # ("tar: .../var/cache/apt/archives/lock: Permission denied",
+        # same for lists/lock and both partial/ dirs), silently dropping
+        # the whole cache save, not just those files. `chmod -R a+rX`
+        # rather than trying to exclude them from the cache action's
+        # `path:` -- exclude globs there did NOT keep them out of the
+        # save manifest on a real run, root cause unconfirmed, so fixing
+        # permissions directly is the more reliable option.
+        run: sudo chmod -R a+rX /var/cache/apt/archives /var/lib/apt/lists
 
       - name: Ensure only the Kindnet CNI config is active
         # Known issue on GitHub Actions runners specifically (matching this
