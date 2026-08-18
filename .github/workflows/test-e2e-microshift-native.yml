@@ -116,25 +116,6 @@ jobs:
           path: microshift-io
           persist-credentials: false
 
-      - name: Cache apt packages for MicroShift install
-        # install.sh's install_prereqs()/install_firewall()/install_crio()/
-        # install_ctl_tools() each call `apt-get update` independently,
-        # re-fetching index metadata for EVERY configured repo (Ubuntu,
-        # Microsoft, Azure, Chrome, plus the cri-o/kubectl repos it adds)
-        # every single time, not just the ones it just added. A warm cache
-        # lets most of those calls resolve via conditional GETs (304s)
-        # instead of full re-downloads. Keyed on microshift-io's own
-        # dependencies.txt so it naturally invalidates when it bumps
-        # CRIO_VERSION or similar.
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            /var/cache/apt/archives
-            /var/lib/apt/lists
-          key: apt-microshift-${{ runner.os }}-${{ hashFiles('microshift-io/src/deb/dependencies.txt') }}
-          restore-keys: |
-            apt-microshift-${{ runner.os }}-
-
       - name: Download prebuilt MicroShift DEB packages
         # microshift-io publishes prebuilt microshift-debs-x86_64.tgz assets on
         # every GitHub Release, so CI can install directly rather than
@@ -438,15 +419,3 @@ jobs:
           sudo systemctl stop microshift.service || true
           echo y | sudo microshift-cleanup-data --all || true
           sudo apt purge -y 'microshift*' || true
-
-          # Must run AFTER apt purge above, not before: apt/dpkg reset
-          # lock/partial back to restrictive root:root permissions on every
-          # invocation, including this last one. A chmod placed right after
-          # "Install MicroShift" earlier in the job got overwritten by this
-          # step's own `apt purge` on a real run (only /var/cache/apt/
-          # archives/partial was still failing -- the earlier fix worked
-          # for everything apt touched before it, just not after). The
-          # actions/cache post-job save step runs as the unprivileged
-          # runner user right after this step and can't read root-only
-          # paths, silently dropping the whole cache save otherwise.
-          sudo chmod -R a+rX /var/cache/apt/archives /var/lib/apt/lists || true
