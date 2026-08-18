@@ -222,7 +222,19 @@ jobs:
         # suite once it's reliable, since checking DNS this early also
         # means it's not (yet) exercising the post-docker environment the
         # real test run will use.
+        #
+        # "Wait for cluster ready" above only waits on node Ready, which
+        # says nothing about whether the openshift-dns DaemonSet has
+        # actually scheduled/started its pod yet -- moving this check
+        # earlier surfaced that race directly (dns-default sitting at
+        # ContainerCreating with zero Service endpoints), so wait on the
+        # DNS pod specifically before probing it.
         run: |
+          echo "Waiting for openshift-dns pod to be Ready..."
+          kubectl wait --for=condition=Ready pod \
+            -n openshift-dns -l dns.operator.openshift.io/daemonset-dns=default \
+            --timeout=120s
+
           kubectl run dns-smoke-test --image=busybox:1.36 --restart=Never -- sleep 300
           kubectl wait --for=condition=Ready pod/dns-smoke-test --timeout=60s
           kubectl exec dns-smoke-test -- nslookup kubernetes.default.svc.cluster.local
