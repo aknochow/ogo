@@ -242,20 +242,6 @@ jobs:
           echo "install.sh failed after 3 attempts" >&2
           exit 1
 
-      - name: Fix apt cache permissions for the post-job cache save
-        # apt's lock files and partial/ download dirs stay root:root with
-        # restrictive permissions even after a successful install --
-        # actions/cache's post-job save step runs as the unprivileged
-        # runner user, so archiving them failed outright on a real run
-        # ("tar: .../var/cache/apt/archives/lock: Permission denied",
-        # same for lists/lock and both partial/ dirs), silently dropping
-        # the whole cache save, not just those files. `chmod -R a+rX`
-        # rather than trying to exclude them from the cache action's
-        # `path:` -- exclude globs there did NOT keep them out of the
-        # save manifest on a real run, root cause unconfirmed, so fixing
-        # permissions directly is the more reliable option.
-        run: sudo chmod -R a+rX /var/cache/apt/archives /var/lib/apt/lists
-
       - name: Ensure only the Kindnet CNI config is active
         # Known issue on GitHub Actions runners specifically (matching this
         # exact environment class, "runnervm*" hostnames): both podman and
@@ -452,3 +438,15 @@ jobs:
           sudo systemctl stop microshift.service || true
           echo y | sudo microshift-cleanup-data --all || true
           sudo apt purge -y 'microshift*' || true
+
+          # Must run AFTER apt purge above, not before: apt/dpkg reset
+          # lock/partial back to restrictive root:root permissions on every
+          # invocation, including this last one. A chmod placed right after
+          # "Install MicroShift" earlier in the job got overwritten by this
+          # step's own `apt purge` on a real run (only /var/cache/apt/
+          # archives/partial was still failing -- the earlier fix worked
+          # for everything apt touched before it, just not after). The
+          # actions/cache post-job save step runs as the unprivileged
+          # runner user right after this step and can't read root-only
+          # paths, silently dropping the whole cache save otherwise.
+          sudo chmod -R a+rX /var/cache/apt/archives /var/lib/apt/lists || true
