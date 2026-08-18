@@ -73,19 +73,31 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
+      - name: Environment fingerprint (compare against local repro)
+        # A local Ubuntu 24.04 VM (Lima, aarch64) reproduced the same
+        # install.sh + MicroShift + docker setup and did NOT hit the DNS
+        # resolution failure seen here -- ip_forward and docker's
+        # DOCKER-USER/DOCKER-FORWARD chain insertion were both ruled out as
+        # the cause by direct testing. Dumping the same fingerprint here so
+        # the two environments can be diffed directly instead of guessing
+        # at what's different (arch, iptables backend, kernel config,
+        # package versions, etc.).
+        run: |
+          echo "=== uname ==="; uname -a
+          echo "=== iptables version/backend ==="; sudo iptables --version; sudo update-alternatives --display iptables 2>&1 | head -5
+          echo "=== nft vs legacy ==="; which iptables-nft iptables-legacy 2>&1
+          echo "=== docker version ==="; docker version --format '{{.Server.Version}}' 2>&1
+          echo "=== network interfaces ==="; ip addr show | grep -E '^[0-9]+:'
+          echo "=== ufw status ==="; sudo ufw status verbose 2>&1 || echo "ufw not installed/active yet"
+          echo "=== relevant sysctls ==="
+          sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables 2>&1
+          echo "=== kernel modules (full) ==="; lsmod | sort
+
       - name: Free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
           sudo docker image prune -af
           df -h
-
-      - name: Setup Go
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version-file: go.mod
-
-      - name: Build operator image
-        run: docker build -f Containerfile -t ${{ env.IMG }} .
 
       - name: Checkout microshift-io/microshift (for src/deb/install.sh)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -198,6 +210,32 @@ jobs:
           echo "=== iptables-save ==="
           sudo iptables-save || true
 
+      - name: DNS smoke test (fail fast, before building/loading any image)
+        # Isolates basic cluster Service-DNS resolution from anything
+        # OGO-specific and, deliberately, from docker/the operator image
+        # entirely: this runs before Setup Go/Build operator image/Load
+        # image so a networking regression fails in seconds and skips the
+        # most expensive remaining steps, instead of failing ~5 minutes in
+        # via the ginkgo suite's metrics test after already paying for a
+        # full image build. Temporary ordering while the native-MicroShift
+        # path is unproven -- revert to running this closer to the e2e
+        # suite once it's reliable, since checking DNS this early also
+        # means it's not (yet) exercising the post-docker environment the
+        # real test run will use.
+        run: |
+          kubectl run dns-smoke-test --image=busybox:1.36 --restart=Never -- sleep 300
+          kubectl wait --for=condition=Ready pod/dns-smoke-test --timeout=60s
+          kubectl exec dns-smoke-test -- nslookup kubernetes.default.svc.cluster.local
+          kubectl delete pod dns-smoke-test --now
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build operator image
+        run: docker build -f Containerfile -t ${{ env.IMG }} .
+
       - name: Load image into MicroShift
         # Native MicroShift's runtime is CRI-O, not podman, so the
         # `podman cp ... exec podman load` dance the MINC workflow used
@@ -261,6 +299,18 @@ jobs:
           # MicroShift a moment to reconcile before handing off to the tests.
           sleep 10
           kubectl wait --for=condition=Ready nodes --all --timeout=120s
+
+      - name: Environment fingerprint (post-MicroShift+docker)
+        # Same fingerprint as the job-start one, captured again now that
+        # MicroShift and docker are both actually running -- the local VM
+        # repro that worked was checked at this exact point (after `docker
+        # run` for the registry), not at job start.
+        run: |
+          echo "=== iptables FORWARD chain ==="; sudo iptables -L FORWARD -n
+          echo "=== relevant sysctls ==="
+          sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables 2>&1
+          echo "=== dns-default Service/Endpoints ==="
+          kubectl get svc,endpoints -n openshift-dns 2>&1
 
       - name: Run e2e tests
         run: |
