@@ -67,6 +67,17 @@ env:
   # shared containers-storage between docker/podman and CRI-O.
   CLUSTER_IMG: localhost:5000/ogo:e2e-test
   MICROSHIFT_DEBS_ASSET: microshift-debs-x86_64.tgz
+  # Pinned rather than tracking `releases/latest`: an unpinned "latest"
+  # download with no integrity check means any future microshift-io
+  # release (or a compromised release asset) gets installed and executed
+  # as root with zero verification. Bump both together when updating --
+  # SHA256 computed locally via: curl -sL <asset-url> | sha256sum
+  # (microshift-io doesn't publish a separate checksums file). The
+  # install.sh checkout below is pinned to the SAME tag so the installer
+  # script's dependency-version logic (see dependencies.txt) always
+  # matches the DEB packages it's installing.
+  MICROSHIFT_VERSION: "4.21.0_g29f429c21_4.21.0_okd_scos.ec.15"
+  MICROSHIFT_DEBS_SHA256: f7b4f503bb1563933d2b5dd5dd4b26c0df67f4a535a656d27ffa2743d7fc115e
 
 jobs:
   test-e2e:
@@ -112,7 +123,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           repository: microshift-io/microshift
-          ref: main
+          ref: ${{ env.MICROSHIFT_VERSION }}
           path: microshift-io
           persist-credentials: false
 
@@ -123,17 +134,19 @@ jobs:
         # build env) and converting them to DEBs (make rpm-to-deb) from
         # source — that path is documented but far too slow/heavy for a
         # per-PR CI job.
+        #
+        # Fetched from the pinned MICROSHIFT_VERSION tag (not
+        # releases/latest) and checksum-verified before extracting --
+        # downloading and unpacking an unpinned, unverified third-party
+        # tarball as root with no integrity check would let any future
+        # release (or a compromised asset) run unchecked in CI.
         run: |
           set -euo pipefail
-          asset_url=$(curl -sSf https://api.github.com/repos/microshift-io/microshift/releases/latest \
-            | jq -r --arg name "${MICROSHIFT_DEBS_ASSET}" '.assets[] | select(.name == $name) | .browser_download_url')
-          if [ -z "${asset_url}" ]; then
-            echo "Could not find ${MICROSHIFT_DEBS_ASSET} on the latest microshift-io/microshift release" >&2
-            exit 1
-          fi
+          asset_url="https://github.com/microshift-io/microshift/releases/download/${MICROSHIFT_VERSION}/${MICROSHIFT_DEBS_ASSET}"
           echo "Downloading ${asset_url}"
-          mkdir -p /tmp/microshift-debs
           curl -LsSf -o /tmp/microshift-debs.tgz "${asset_url}"
+          echo "${MICROSHIFT_DEBS_SHA256}  /tmp/microshift-debs.tgz" | sha256sum -c -
+          mkdir -p /tmp/microshift-debs
           tar -xzf /tmp/microshift-debs.tgz -C /tmp/microshift-debs
           ls -la /tmp/microshift-debs
 
@@ -168,7 +181,7 @@ jobs:
         # the operator image to be built yet -- only the later push does.
         run: |
           set -euo pipefail
-          docker run -d --name local-registry -p 5000:5000 registry:2
+          docker run -d --name local-registry -p 127.0.0.1:5000:5000 registry:2
 
           echo "Waiting for local registry to come up..."
           for i in $(seq 1 30); do
@@ -264,6 +277,11 @@ jobs:
             echo "Waiting for kubeconfig to be generated... ($i/60)"
             sleep 5
           done
+          if ! sudo test -f /var/lib/microshift/resources/kubeadmin/kubeconfig; then
+            echo "ERROR: kubeconfig was never generated after 300s" >&2
+            sudo systemctl status microshift --no-pager || true
+            exit 1
+          fi
           sudo cat /var/lib/microshift/resources/kubeadmin/kubeconfig > "$HOME/.kube/config"
           chmod 600 "$HOME/.kube/config"
 

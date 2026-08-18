@@ -122,11 +122,12 @@ Gateway, no cert-manager, no OpenShift OAuth.
   local iteration
 - **TLS**: operator-managed self-signed
 - **Cluster**: MINC (MicroShift), driven by `make deploy` against a local
-  kubeconfig — this is the only local cluster type verified against both
-  the operator and the CI e2e suite (`test-e2e.yml` runs MINC). Kind is
-  still present as unused kubebuilder scaffolding (`make test-e2e`) but
-  hasn't been exercised for this project — don't reach for it until it's
-  actually verified
+  kubeconfig — this is the only local cluster type verified against the
+  operator directly. The CI e2e suite runs on native MicroShift instead
+  (`test-e2e-microshift-native.yml`, installed via microshift-io's Ubuntu
+  `.deb` packages, no nested containers). Kind is still present as unused
+  kubebuilder scaffolding (`make test-e2e`) but hasn't been exercised for
+  this project — don't reach for it until it's actually verified
 
 **Cannot test**: OpenShift SSO, `OAuthClient` reconciliation, real
 cert-manager/Let's Encrypt issuance. MINC does not have the
