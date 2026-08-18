@@ -1,0 +1,444 @@
+name: E2E Tests (MicroShift Native)
+
+# Required check for main (replaces the former "E2E on MINC" workflow,
+# removed 2026-08-18). MINC (nested MicroShift-in-podman) started failing
+# repo-wide on the ubuntu-24.04 runner image after it bumped Podman
+# 4.9.3 -> 5.8.4: the outer podman now defaults to
+# networkBackend=netavark/cgroupManager=cgroupfs, which clashes with the
+# inner MicroShift/CRI-O's networkBackend=cni/cgroupManager=systemd, and
+# kube-kindnet/kube-proxy DaemonSet pods fail with CreateContainerError.
+# Bumping crun and forcing cgroup_manager=systemd via a podman
+# containers.conf.d drop-in did NOT fix it (see branch history on
+# ci/microshift-native-e2e for both attempts).
+#
+# This workflow sidesteps that whole bug class by installing MicroShift
+# natively on the runner via the microshift-io/microshift community project
+# (https://github.com/microshift-io/microshift) — it builds real
+# openshift/microshift sources against OKD payload images (no Red Hat
+# subscription/pull secret needed) and ships a DEB package for Ubuntu that
+# runs MicroShift as a plain systemd service directly on the host. There is
+# no nested container layer, so there is no inner/outer podman to disagree
+# about cgroups or networking.
+#
+# Trade-off: per microshift-io's own OS support matrix, Ubuntu is Kindnet-only
+# (no OVN-Kubernetes) and has no Greenboot. This is NOT expected to matter for
+# what this job actually exercises: the "Manager" e2e suite (test/e2e/e2e_test.go)
+# only creates a namespace, installs the OpenShellGateway CRD, deploys the
+# controller-manager, and checks the metrics endpoint — it never touches
+# route.openshift.io, SecurityContextConstraints, or oauth.openshift.io/
+# user.openshift.io. Those OpenShift-only paths live in
+# test/e2e/e2e_real_cluster_test.go's "RealCluster" suite, which is already
+# gated on hasOpenShiftOAuthAPI() and only runs against a real OpenShift
+# cluster (make test-e2e-real) — unaffected either way by this workflow.
+#
+# VALIDATED 2026-08-18: first fully green end-to-end run after fixing, in
+# order: install.sh's unbounded network calls hanging silently, a DNS-pod
+# readiness race, a `timeout`-through-`sudo` bug that broke retries, and the
+# real root cause -- kube-proxy taking minutes to route a freshly created
+# Service after `systemctl restart crio` (needed only to make CRI-O trust a
+# local image registry). That restart, and the multi-minute stabilization
+# wait it required, are eliminated below by setting up the registry and its
+# trust config BEFORE MicroShift/CRI-O ever starts, so CRI-O picks it up on
+# its first (only) start.
+#
+# Forward-looking: once this has proven stable here, the plan is to extract
+# the native-MicroShift setup into its own repo as a reusable composite
+# action/workflow that other repos can import, rather than duplicating this
+# install/bring-up logic per-repo. Not started yet.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  IMG: quay.io/aknochow/ogo:e2e-test
+  # Separate reference for the in-cluster pull path: the operator image is
+  # built with `docker build` (into the Docker daemon's own storage, which
+  # CRI-O does not share), then pushed to a throwaway local registry so
+  # CRI-O can pull it like any other image. See "Push operator image to
+  # local registry" below for why this route was chosen over relying on
+  # shared containers-storage between docker/podman and CRI-O.
+  CLUSTER_IMG: localhost:5000/ogo:e2e-test
+  MICROSHIFT_DEBS_ASSET: microshift-debs-x86_64.tgz
+  # Pinned rather than tracking `releases/latest`: an unpinned "latest"
+  # download with no integrity check means any future microshift-io
+  # release (or a compromised release asset) gets installed and executed
+  # as root with zero verification. Bump both together when updating --
+  # SHA256 computed locally via: curl -sL <asset-url> | sha256sum
+  # (microshift-io doesn't publish a separate checksums file). The
+  # install.sh checkout below is pinned to the SAME tag so the installer
+  # script's dependency-version logic (see dependencies.txt) always
+  # matches the DEB packages it's installing.
+  MICROSHIFT_VERSION: "4.21.0_g29f429c21_4.21.0_okd_scos.ec.15"
+  MICROSHIFT_DEBS_SHA256: f7b4f503bb1563933d2b5dd5dd4b26c0df67f4a535a656d27ffa2743d7fc115e
+
+jobs:
+  test-e2e:
+    name: E2E on MicroShift (native)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      KUBECONFIG: /home/runner/.kube/config
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Environment fingerprint (compare against local repro)
+        # A local Ubuntu 24.04 VM (Lima, aarch64) reproduced the same
+        # install.sh + MicroShift + docker setup for debugging -- kept as a
+        # cheap (~1s) diagnostic aid for any future divergence between this
+        # runner and a local repro.
+        run: |
+          echo "=== uname ==="; uname -a
+          echo "=== iptables version/backend ==="; sudo iptables --version; sudo update-alternatives --display iptables 2>&1 | head -5
+          echo "=== nft vs legacy ==="; which iptables-nft iptables-legacy 2>&1
+          echo "=== docker version ==="; docker version --format '{{.Server.Version}}' 2>&1
+          echo "=== network interfaces ==="; ip addr show | grep -E '^[0-9]+:'
+          echo "=== ufw status ==="; sudo ufw status verbose 2>&1 || echo "ufw not installed/active yet"
+          echo "=== relevant sysctls ==="
+          sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables 2>&1 || true
+          echo "=== kernel modules (full) ==="; lsmod | sort
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost
+          sudo docker image prune -af
+          df -h
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Checkout microshift-io/microshift (for src/deb/install.sh)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: microshift-io/microshift
+          ref: ${{ env.MICROSHIFT_VERSION }}
+          path: microshift-io
+          persist-credentials: false
+
+      - name: Download prebuilt MicroShift DEB packages
+        # microshift-io publishes prebuilt microshift-debs-x86_64.tgz assets on
+        # every GitHub Release, so CI can install directly rather than
+        # building RPMs (make rpm, needs dnf/podman + a CentOS Stream 9
+        # build env) and converting them to DEBs (make rpm-to-deb) from
+        # source — that path is documented but far too slow/heavy for a
+        # per-PR CI job.
+        #
+        # Fetched from the pinned MICROSHIFT_VERSION tag (not
+        # releases/latest) and checksum-verified before extracting --
+        # downloading and unpacking an unpinned, unverified third-party
+        # tarball as root with no integrity check would let any future
+        # release (or a compromised asset) run unchecked in CI.
+        run: |
+          set -euo pipefail
+          asset_url="https://github.com/microshift-io/microshift/releases/download/${MICROSHIFT_VERSION}/${MICROSHIFT_DEBS_ASSET}"
+          echo "Downloading ${asset_url}"
+          curl -LsSf -o /tmp/microshift-debs.tgz "${asset_url}"
+          echo "${MICROSHIFT_DEBS_SHA256}  /tmp/microshift-debs.tgz" | sha256sum -c -
+          mkdir -p /tmp/microshift-debs
+          tar -xzf /tmp/microshift-debs.tgz -C /tmp/microshift-debs
+          ls -la /tmp/microshift-debs
+
+      - name: Start building operator image in the background
+        # `docker build` (98s on a real run) doesn't depend on MicroShift
+        # at all, and the MicroShift install+bring-up chain doesn't need
+        # the image until the very end -- background the build here so it
+        # overlaps with that chain instead of running after it. GitHub
+        # Actions runs steps in one job sequentially on the same VM, so
+        # there's no artifact-transfer overhead to worry about; `nohup` +
+        # `disown` detach it from this step's shell so it survives into
+        # later steps. "Wait for operator image build to finish" below
+        # picks the result back up right before it's actually needed.
+        run: |
+          nohup bash -c '
+            docker build -f Containerfile -t ${{ env.IMG }} . > /tmp/build-operator-image.log 2>&1
+            echo $? > /tmp/build-operator-image.exitcode
+          ' >/dev/null 2>&1 &
+          disown
+          echo "Backgrounded docker build; continuing with MicroShift install/bring-up"
+
+      - name: Start local registry and configure CRI-O trust
+        # Runs BEFORE MicroShift/install.sh below, so CRI-O picks up this
+        # trust config on its first (and only) start -- this is the whole
+        # point of the reorder: install.sh's install_crio() is what starts
+        # CRI-O initially, so as long as this file exists before that runs,
+        # CRI-O never needs a restart later to pick up a config change.
+        # Eliminating that restart also eliminates the multi-minute
+        # kube-proxy stabilization wait a restart was found to require (see
+        # git history / doc.local-ubuntu-vm-ci-repro.yaml for the
+        # confirmed root cause). The registry container itself doesn't need
+        # the operator image to be built yet -- only the later push does.
+        run: |
+          set -euo pipefail
+          docker run -d --name local-registry -p 127.0.0.1:5000:5000 registry:2
+
+          echo "Waiting for local registry to come up..."
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:5000/v2/ >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          if ! curl -sf http://localhost:5000/v2/ >/dev/null; then
+            echo "ERROR: local registry did not become ready within 30s" >&2
+            docker logs local-registry || true
+            exit 1
+          fi
+
+          echo "Configuring CRI-O to trust the local insecure registry..."
+          sudo mkdir -p /etc/containers/registries.conf.d
+          cat <<'EOF' | sudo tee /etc/containers/registries.conf.d/999-local-registry.conf
+          [[registry]]
+          location = "localhost:5000"
+          insecure = true
+          EOF
+
+      - name: Install MicroShift (DEB, native — no nested containers)
+        working-directory: microshift-io
+        # install.sh's install_crio()/install_ctl_tools() call `curl -fsSL`
+        # against pkgs.k8s.io with no timeout at all -- if that stalls, the
+        # whole step hangs silently (zero output, since -s suppresses
+        # progress) until the job's 30-minute timeout-minutes kills it,
+        # burning the entire CI budget for nothing. Confirmed happening on
+        # a real run: the step sat with no log output for 15+ minutes.
+        # Bound each attempt with `timeout` so a stall fails fast and
+        # loud, and retry a couple of times since a transient network
+        # blip is the expected failure mode here, not a real bug -- the
+        # script is idempotent (installer functions overwrite their own
+        # apt sources/keyrings and re-run apt-get update/install safely).
+        #
+        # First version of this ran `timeout 300 sudo ./install.sh`, which
+        # only kills the `sudo` process itself -- when attempt 1 timed out
+        # mid `apt-get update` (a slow azure.archive.ubuntu.com mirror),
+        # the orphaned apt-get kept running and holding
+        # /var/lib/apt/lists/lock, so both retries failed immediately with
+        # "Could not get lock". Run `timeout` INSIDE the sudo boundary so
+        # it manages the process group as root, add -k to force SIGKILL if
+        # SIGTERM doesn't finish the job, and clear any stale apt locks
+        # before each attempt as defense-in-depth regardless.
+        run: |
+          for attempt in 1 2 3; do
+            echo "=== install.sh attempt ${attempt}/3 ==="
+            sudo pkill -9 -f 'apt-get|dpkg' 2>/dev/null || true
+            sudo rm -f /var/lib/apt/lists/lock /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock
+            sudo dpkg --configure -a || true
+            if sudo timeout -k 10 300 ./src/deb/install.sh /tmp/microshift-debs; then
+              exit 0
+            fi
+            echo "install.sh attempt ${attempt} failed or timed out, retrying..."
+          done
+          echo "install.sh failed after 3 attempts" >&2
+          exit 1
+
+      - name: Ensure only the Kindnet CNI config is active
+        # Known issue on GitHub Actions runners specifically (matching this
+        # exact environment class, "runnervm*" hostnames): both podman and
+        # crio are present, and podman's own default bridge CNI conflist can
+        # get (re-)written to /etc/cni/net.d after install.sh's own
+        # install_crio() already disabled whatever was there at install
+        # time -- including as a side effect of the `docker run` for the
+        # local registry a couple of steps up. CRI-O then picks up the
+        # wrong network for some pods -- matches microshift-io/microshift#95
+        # exactly, root cause of a "Could not resolve host
+        # ...svc.cluster.local" DNS failure seen on an early run of this
+        # workflow (pod-to-service traffic silently went out on the wrong
+        # bridge). Reapply the same disable-non-kindnet-conflists step
+        # install.sh does, right before MicroShift actually starts
+        # scheduling pods. A single pass is sufficient now that CRI-O only
+        # ever starts once (no restart later to reintroduce the problem).
+        run: |
+          echo "=== /etc/cni/net.d before cleanup ==="
+          ls -la /etc/cni/net.d/ || true
+          find /etc/cni/net.d -name '*.conflist' ! -name '*kindnet*' -print 2>/dev/null | while read -r cl; do
+            echo "Disabling non-kindnet CNI config: ${cl}"
+            sudo mv "${cl}" "${cl}.disabled"
+          done
+          echo "=== /etc/cni/net.d after cleanup ==="
+          ls -la /etc/cni/net.d/ || true
+
+      - name: Start MicroShift service
+        run: |
+          sudo systemctl start microshift.service
+          sudo systemctl status microshift.service --no-pager || true
+
+      - name: Setup kubeconfig
+        run: |
+          mkdir -p "$HOME/.kube"
+          for i in $(seq 1 60); do
+            if sudo test -f /var/lib/microshift/resources/kubeadmin/kubeconfig; then
+              break
+            fi
+            echo "Waiting for kubeconfig to be generated... ($i/60)"
+            sleep 5
+          done
+          if ! sudo test -f /var/lib/microshift/resources/kubeadmin/kubeconfig; then
+            echo "ERROR: kubeconfig was never generated after 300s" >&2
+            sudo systemctl status microshift --no-pager || true
+            exit 1
+          fi
+          sudo cat /var/lib/microshift/resources/kubeadmin/kubeconfig > "$HOME/.kube/config"
+          chmod 600 "$HOME/.kube/config"
+
+      - name: Wait for cluster ready
+        run: |
+          echo "Waiting for nodes..."
+          kubectl wait --for=condition=Ready nodes --all --timeout=300s
+
+          echo "Waiting for system pods..."
+          kubectl get pods -A
+          echo "Cluster is ready"
+
+      - name: Diagnose MicroShift failure
+        if: failure()
+        run: |
+          # All commands here are best-effort diagnostic aids - `|| true`
+          # prevents any single missing tool or command from cutting the
+          # diagnostic dump short.
+          echo "=== systemctl status crio ==="
+          sudo systemctl status crio --no-pager || true
+          echo "=== systemctl status microshift ==="
+          sudo systemctl status microshift --no-pager || true
+          echo "=== journalctl -u microshift (tail) ==="
+          sudo journalctl -u microshift --no-pager | tail -300 || true
+          echo "=== journalctl -u crio (tail) ==="
+          sudo journalctl -u crio --no-pager | tail -200 || true
+          echo "=== crictl ps -a ==="
+          sudo crictl ps -a || true
+          echo "=== crictl images ==="
+          sudo crictl images || true
+          echo "=== kubectl get pods -A ==="
+          kubectl get pods -A || true
+          echo "=== kubectl describe nodes ==="
+          kubectl describe nodes || true
+          echo "=== ip addr ==="
+          ip addr || true
+          echo "=== iptables-save ==="
+          sudo iptables-save || true
+
+      - name: DNS smoke test (fail fast, before waiting on the image build)
+        # Isolates basic cluster Service-DNS resolution from anything
+        # OGO-specific: if the cluster itself is unhealthy, fail here in
+        # seconds rather than after waiting on the background image build
+        # or running the full suite.
+        #
+        # "Wait for cluster ready" above only waits on node Ready, which
+        # says nothing about whether the openshift-dns DaemonSet has
+        # actually scheduled/started its pod yet -- an earlier version of
+        # this workflow hit that race directly (dns-default sitting at
+        # ContainerCreating with zero Service endpoints), so wait on the
+        # DNS pod specifically before probing it.
+        run: |
+          echo "Waiting for openshift-dns pod to be Ready..."
+          kubectl wait --for=condition=Ready pod \
+            -n openshift-dns -l dns.operator.openshift.io/daemonset-dns=default \
+            --timeout=120s
+
+          kubectl run dns-smoke-test --image=busybox:1.36 --restart=Never -- sleep 300
+          kubectl wait --for=condition=Ready pod/dns-smoke-test --timeout=60s
+          kubectl exec dns-smoke-test -- nslookup kubernetes.default.svc.cluster.local
+          kubectl delete pod dns-smoke-test --now
+
+      - name: Wait for operator image build to finish
+        run: |
+          echo "Waiting for the background operator image build to finish..."
+          for i in $(seq 1 180); do
+            if [ -f /tmp/build-operator-image.exitcode ]; then
+              break
+            fi
+            sleep 1
+          done
+          echo "=== docker build log ==="
+          cat /tmp/build-operator-image.log || true
+          exit_code=$(cat /tmp/build-operator-image.exitcode 2>/dev/null || echo 1)
+          if [ "${exit_code}" != "0" ]; then
+            echo "Background operator image build failed (exit ${exit_code})" >&2
+            exit 1
+          fi
+
+      - name: Push operator image to local registry
+        # Native MicroShift's runtime is CRI-O, not podman, so the
+        # `podman cp ... exec podman load` dance the MINC workflow used
+        # (loading into a nested podman inside the microshift container)
+        # doesn't apply here — there's no nested container to copy into.
+        #
+        # This uses a throwaway local insecure registry as the hand-off
+        # point: it's the most portable option since it doesn't assume
+        # docker (which builds the image) and CRI-O share the same
+        # containers-storage graph root, which is NOT guaranteed on Ubuntu
+        # even though both are built on the containers/storage library.
+        # The registry itself and CRI-O's trust config were already set up
+        # earlier, before MicroShift/CRI-O's first start, so this step is
+        # just the tag+push -- no restart needed here.
+        #
+        # UNVERIFIED alternative worth trying if this proves flaky: build
+        # with `podman build` instead of `docker build`, and if CRI-O's
+        # storage.conf happens to point at the same graph root podman uses
+        # (/var/lib/containers/storage), the image may already be visible
+        # to CRI-O with no push step at all. Not used here as the default
+        # because that storage-root alignment isn't documented by
+        # microshift-io and would need to be confirmed on a real runner.
+        run: |
+          docker tag ${{ env.IMG }} ${{ env.CLUSTER_IMG }}
+          docker push ${{ env.CLUSTER_IMG }}
+
+      - name: Run e2e tests
+        run: |
+          SKIP_BUILD=true CERT_MANAGER_INSTALL_SKIP=true IMG=${{ env.CLUSTER_IMG }} \
+            go test ./test/e2e/ -v -ginkgo.v -timeout 10m
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          echo "=== Operator Logs ==="
+          kubectl logs -n ogo -l control-plane=controller-manager \
+            -c manager --tail=100 2>/dev/null || true
+
+          echo ""
+          echo "=== Events ==="
+          kubectl get events -n ogo --sort-by='.lastTimestamp' 2>/dev/null \
+            | tail -30 || true
+
+          echo ""
+          echo "=== All Pods ==="
+          kubectl get pods -A 2>/dev/null || true
+
+          echo ""
+          echo "=== /etc/cni/net.d (active vs disabled) ==="
+          ls -la /etc/cni/net.d/ || true
+
+          echo ""
+          echo "=== DNS Service and endpoints (openshift-dns) ==="
+          kubectl get svc,endpoints -n openshift-dns 2>/dev/null || true
+
+          echo ""
+          echo "=== CoreDNS/dns-default logs ==="
+          kubectl logs -n openshift-dns -l dns.operator.openshift.io/daemonset-dns=default \
+            -c dns --tail=100 2>/dev/null || true
+
+          echo ""
+          echo "=== kube-proxy pod status/logs ==="
+          kubectl get pods -n kube-proxy -o wide 2>/dev/null || true
+          kubectl logs -n kube-proxy -l k8s-app=kube-proxy --tail=150 2>/dev/null || true
+
+          echo ""
+          echo "=== iptables KUBE-SVC/KUBE-SEP rules (does kube-proxy have any Service DNAT rules at all?) ==="
+          sudo iptables-save -t nat 2>/dev/null | grep -E 'KUBE-SVC|KUBE-SEP' | head -100 || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f local-registry || true
+          sudo systemctl stop microshift.service || true
+          echo y | sudo microshift-cleanup-data --all || true
+          sudo apt purge -y 'microshift*' || true
