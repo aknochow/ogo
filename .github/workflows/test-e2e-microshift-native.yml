@@ -121,6 +121,29 @@ jobs:
         run: |
           sudo ./src/deb/install.sh /tmp/microshift-debs
 
+      - name: Ensure only the Kindnet CNI config is active
+        # Known issue on GitHub Actions runners specifically (matching this
+        # exact environment class, "runnervm*" hostnames): both podman and
+        # crio are present, and podman's own default bridge CNI conflist can
+        # get (re-)written to /etc/cni/net.d after install.sh's own
+        # install_crio() already disabled whatever was there at install
+        # time. CRI-O then picks up the wrong network for some pods --
+        # matches microshift-io/microshift#95 exactly, root cause of a
+        # "Could not resolve host ...svc.cluster.local" DNS failure seen on
+        # the first real test run of this workflow (pod-to-service traffic
+        # silently went out on the wrong bridge). Reapply the same
+        # disable-non-kindnet-conflists step install.sh does, right before
+        # MicroShift actually starts scheduling pods, as a second pass.
+        run: |
+          echo "=== /etc/cni/net.d before cleanup ==="
+          ls -la /etc/cni/net.d/ || true
+          find /etc/cni/net.d -name '*.conflist' ! -name '*kindnet*' -print 2>/dev/null | while read -r cl; do
+            echo "Disabling non-kindnet CNI config: ${cl}"
+            sudo mv "${cl}" "${cl}.disabled"
+          done
+          echo "=== /etc/cni/net.d after cleanup ==="
+          ls -la /etc/cni/net.d/ || true
+
       - name: Start MicroShift service
         run: |
           sudo systemctl start microshift.service
@@ -216,6 +239,22 @@ jobs:
           location = "localhost:5000"
           insecure = true
           EOF
+
+          # Re-check for a stray podman CNI conflist here too, not just
+          # before MicroShift starts: this is the step that first invokes
+          # docker (the local registry container), and microshift-io/
+          # microshift#95's failure mode is podman's default bridge conflist
+          # reappearing in /etc/cni/net.d after something touches container
+          # networking on the host -- pods created AFTER that point pick up
+          # the wrong network. Piggyback on the crio restart already needed
+          # below for the registry config, rather than restarting twice.
+          echo "=== /etc/cni/net.d before second cleanup pass ==="
+          ls -la /etc/cni/net.d/ || true
+          find /etc/cni/net.d -name '*.conflist' ! -name '*kindnet*' -print 2>/dev/null | while read -r cl; do
+            echo "Disabling non-kindnet CNI config: ${cl}"
+            sudo mv "${cl}" "${cl}.disabled"
+          done
+
           sudo systemctl restart crio
 
           # Restarting crio briefly drops the kubelet's CRI connection; give
@@ -243,6 +282,19 @@ jobs:
           echo ""
           echo "=== All Pods ==="
           kubectl get pods -A 2>/dev/null || true
+
+          echo ""
+          echo "=== /etc/cni/net.d (active vs disabled) ==="
+          ls -la /etc/cni/net.d/ || true
+
+          echo ""
+          echo "=== DNS Service and endpoints (openshift-dns) ==="
+          kubectl get svc,endpoints -n openshift-dns 2>/dev/null || true
+
+          echo ""
+          echo "=== CoreDNS/dns-default logs ==="
+          kubectl logs -n openshift-dns -l dns.operator.openshift.io/daemonset-dns=default \
+            -c dns --tail=100 2>/dev/null || true
 
       - name: Cleanup
         if: always()
