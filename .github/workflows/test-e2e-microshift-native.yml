@@ -90,7 +90,7 @@ jobs:
           echo "=== network interfaces ==="; ip addr show | grep -E '^[0-9]+:'
           echo "=== ufw status ==="; sudo ufw status verbose 2>&1 || echo "ufw not installed/active yet"
           echo "=== relevant sysctls ==="
-          sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables 2>&1
+          sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables 2>&1 || true
           echo "=== kernel modules (full) ==="; lsmod | sort
 
       - name: Free disk space
@@ -308,7 +308,7 @@ jobs:
         run: |
           echo "=== iptables FORWARD chain ==="; sudo iptables -L FORWARD -n
           echo "=== relevant sysctls ==="
-          sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables 2>&1
+          sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables 2>&1 || true
           echo "=== dns-default Service/Endpoints ==="
           kubectl get svc,endpoints -n openshift-dns 2>&1
 
