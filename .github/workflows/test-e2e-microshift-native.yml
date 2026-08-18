@@ -338,10 +338,34 @@ jobs:
         # run` for the registry), not at job start.
         run: |
           echo "=== iptables FORWARD chain ==="; sudo iptables -L FORWARD -n
+          echo "=== ufw forward sub-chains (with packet counters) ==="
+          sudo iptables -L ufw-before-forward -n -v || true
+          sudo iptables -L ufw-user-forward -n -v || true
+          sudo iptables -L ufw-after-forward -n -v || true
+          sudo iptables -L ufw-reject-forward -n -v || true
           echo "=== relevant sysctls ==="
           sysctl net.ipv4.ip_forward net.bridge.bridge-nf-call-iptables 2>&1 || true
           echo "=== dns-default Service/Endpoints ==="
           kubectl get svc,endpoints -n openshift-dns 2>&1
+
+      - name: TCP smoke test (post-crio-restart, fail fast before the full suite)
+        # The DNS smoke test earlier in this job (before Setup Go/Build/
+        # Load image) passed -- that's a UDP request to a Service
+        # ClusterIP. The real OGO e2e suite's metrics test does a TCP
+        # connection to a Service ClusterIP and, on a real run, DNS
+        # resolved the hostname fine but the TCP connect itself timed out
+        # ("Operation timed out", not "connection refused" -- a silent
+        # drop, not a rejection) after ~5 minutes. The one thing that
+        # changed in between is the `systemctl restart crio` a few steps
+        # up. This isolates whether TCP-to-Service routing specifically
+        # breaks after that restart, in ~15 seconds instead of waiting out
+        # the full suite's Eventually timeout to find out.
+        run: |
+          DNS_CLUSTER_IP=$(kubectl get svc dns-default -n openshift-dns -o jsonpath='{.spec.clusterIP}')
+          kubectl run tcp-smoke-test --image=busybox:1.36 --restart=Never -- sleep 300
+          kubectl wait --for=condition=Ready pod/tcp-smoke-test --timeout=60s
+          kubectl exec tcp-smoke-test -- wget -T 5 -O- "http://${DNS_CLUSTER_IP}:9154/metrics"
+          kubectl delete pod tcp-smoke-test --now
 
       - name: Run e2e tests
         run: |
