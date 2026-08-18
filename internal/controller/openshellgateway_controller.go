@@ -65,6 +65,13 @@ const (
 	managedByValue   = "ogo"
 	defaultNamespace = "ogo"
 	phaseFailed      = "Failed"
+	// authCASuffix and gatewayCASuffix name the two CA-only ConfigMaps
+	// published from the same underlying server TLS CA (see serverTLSCA):
+	// authCASuffix for the auth-bridge's separate HTTPS listener, gatewayCASuffix
+	// for the gateway's own gRPC listener. Kept as constants so reconcileDelete's
+	// cleanup list can't drift from what reconcileCAConfigMap actually creates.
+	authCASuffix    = "-auth-ca"
+	gatewayCASuffix = "-gateway-ca"
 	// phaseSuperseded marks an OpenShellPolicy CR that isn't the active
 	// gateway-global policy (see OpenShellPolicyReconciler). Not a failure --
 	// collapsing it into phaseFailed would repeat the same "reports success
@@ -191,6 +198,7 @@ func (r *OpenShellGatewayReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		{"RoleBinding", r.reconcileRoleBinding},
 		{"TLS", r.reconcileTLS},
 		{"AuthBridgeCA", r.reconcileAuthBridgeCA},
+		{"GatewayCA", r.reconcileGatewayCA},
 		{"JWTKeys", r.reconcileJWTKeys},
 		{"AuthBridgeKeys", r.reconcileAuthBridgeKeys},
 		{"ConfigMap", r.reconcileConfigMap},
@@ -339,16 +347,18 @@ func (r *OpenShellGatewayReconciler) reconcileDelete(ctx context.Context, gw *og
 		}
 	}
 
-	authCA := &corev1.ConfigMap{}
-	authCAKey := types.NamespacedName{Name: gw.Name + "-auth-ca", Namespace: ns}
-	if err := r.Get(ctx, authCAKey, authCA); err == nil {
-		if authCA.Labels[labelManagedBy] == managedByValue && authCA.Labels[labelInstance] == gw.Name {
-			if err := r.Delete(ctx, authCA); err != nil && !apierrors.IsNotFound(err) {
-				cleanupErrors = append(cleanupErrors, err)
+	for _, suffix := range []string{authCASuffix, gatewayCASuffix} {
+		ca := &corev1.ConfigMap{}
+		caKey := types.NamespacedName{Name: gw.Name + suffix, Namespace: ns}
+		if err := r.Get(ctx, caKey, ca); err == nil {
+			if ca.Labels[labelManagedBy] == managedByValue && ca.Labels[labelInstance] == gw.Name {
+				if err := r.Delete(ctx, ca); err != nil && !apierrors.IsNotFound(err) {
+					cleanupErrors = append(cleanupErrors, err)
+				}
 			}
+		} else if !apierrors.IsNotFound(err) {
+			cleanupErrors = append(cleanupErrors, err)
 		}
-	} else if !apierrors.IsNotFound(err) {
-		cleanupErrors = append(cleanupErrors, err)
 	}
 
 	if len(cleanupErrors) > 0 {
@@ -578,11 +588,31 @@ func (r *OpenShellGatewayReconciler) reconcileSelfSignedTLS(ctx context.Context,
 }
 
 func (r *OpenShellGatewayReconciler) reconcileAuthBridgeCA(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
-	name := gw.Name + "-auth-ca"
+	tlsEnabled := gw.Spec.TLS.Enabled == nil || *gw.Spec.TLS.Enabled
+	enabled := tlsEnabled && authBridgeEnabled(gw, openshift.IsOpenShift(r.DiscoveryClient))
+	return r.reconcileCAConfigMap(ctx, gw, gw.Name+authCASuffix, enabled)
+}
+
+// reconcileGatewayCA publishes the gateway's own server TLS CA — the same
+// material the gateway's gRPC listener presents — into a ConfigMap with no
+// private key or client mTLS credential, for bearer/OIDC clients that only
+// need to establish server trust. This is distinct from -auth-ca (above),
+// which gates on the auth-bridge being enabled; the gateway's own listener
+// needs TLS trust published whenever gateway TLS itself is enabled.
+func (r *OpenShellGatewayReconciler) reconcileGatewayCA(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
+	tlsEnabled := gw.Spec.TLS.Enabled == nil || *gw.Spec.TLS.Enabled
+	return r.reconcileCAConfigMap(ctx, gw, gw.Name+gatewayCASuffix, tlsEnabled)
+}
+
+// reconcileCAConfigMap ensures a CA-only ConfigMap (public chain, no private
+// key or client credential) exists under name when enabled, and removes it
+// -- if OGO-managed -- when not. Shared by reconcileAuthBridgeCA and
+// reconcileGatewayCA, which publish the same underlying server TLS CA under
+// different names for different client audiences.
+func (r *OpenShellGatewayReconciler) reconcileCAConfigMap(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, name string, enabled bool) error {
 	namespace := gatewayNamespace(gw)
 	configMap := &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace}}
-	tlsEnabled := gw.Spec.TLS.Enabled == nil || *gw.Spec.TLS.Enabled
-	if !tlsEnabled || !authBridgeEnabled(gw, openshift.IsOpenShift(r.DiscoveryClient)) {
+	if !enabled {
 		if err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, configMap); err != nil {
 			if apierrors.IsNotFound(err) {
 				return nil
@@ -1900,7 +1930,7 @@ func (r *OpenShellGatewayReconciler) authBridgeRouteTLS(ctx context.Context, gw 
 		}, nil
 	}
 
-	configMapName := gw.Name + "-auth-ca"
+	configMapName := gw.Name + authCASuffix
 	configMap := &corev1.ConfigMap{}
 	if err := r.Get(ctx, types.NamespacedName{Name: configMapName, Namespace: gatewayNamespace(gw)}, configMap); err != nil {
 		return nil, fmt.Errorf("reading auth-bridge CA ConfigMap: %w", err)
