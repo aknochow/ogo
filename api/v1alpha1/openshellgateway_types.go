@@ -306,6 +306,7 @@ const (
 	ConditionEnvoyProxySCCReady = "EnvoyProxySCCReady"
 	ConditionEnvoyRouteReady    = "EnvoyRouteReady"
 	ConditionBrowserSSOReady    = "BrowserSSOReady"
+	ConditionImageConfigValid   = "ImageConfigValid"
 )
 
 // Phase values for OpenShellGateway.

@@ -97,6 +97,31 @@ func TestRenderGatewayTOML_TLSDisabled(t *testing.T) {
 	}
 }
 
+func TestRenderGatewayTOML_SupervisorImageDigestPinned(t *testing.T) {
+	// Regression check for the same class of bug fixed in the controller's
+	// gateway-image handling (RDU incident, 2026-08-03): a digest-pinned
+	// image plus a non-empty ImageTag must not concatenate into an invalid
+	// "image@sha256:...:tag" reference. supervisorImage() already guards
+	// this (any ":" in the image, including the one inside "sha256:",
+	// suppresses the tag append) - this test locks that behavior in.
+	const digestImage = "ghcr.io/nvidia/openshell/supervisor@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	gw := &ogov1alpha1.OpenShellGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "openshell"},
+		Spec: ogov1alpha1.OpenShellGatewaySpec{
+			Namespace:       "openshell",
+			Database:        ogov1alpha1.DatabaseSpec{SecretName: "pg-uri"},
+			SupervisorImage: digestImage,
+			ImageTag:        "0.0.92",
+		},
+	}
+
+	toml := RenderGatewayTOML(gw, "openshell")
+
+	if !strings.Contains(toml, `supervisor_image      = "`+digestImage+`"`) {
+		t.Errorf("expected supervisor_image to remain digest-pinned without an appended tag, got:\n%s", toml)
+	}
+}
+
 func TestRenderGatewayTOML_CustomSandbox(t *testing.T) {
 	gw := &ogov1alpha1.OpenShellGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "openshell"},
