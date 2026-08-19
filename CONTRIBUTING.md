@@ -13,6 +13,19 @@ make lint     # Run golangci-lint
 See [AGENTS.md](AGENTS.md) for project structure, versioning rules, and
 image ownership. See [docs/](docs/) for full documentation.
 
+### Pre-commit hooks
+
+Catch lint failures locally instead of waiting on CI:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+Runs golangci-lint (pinned to the same version as CI), `go vet`, and
+`go build` on every commit. Run `pre-commit run --all-files` to check
+the whole tree at once.
+
 ## Upstream OpenShell version bumps
 
 The `ImageTag` default (`api/v1alpha1/openshellgateway_types.go`) pins the
@@ -28,9 +41,10 @@ release - see `AGENTS.md`'s tag strategy table.
 
 ## Testing against a real cluster
 
-`make test` and the CI e2e suite (MINC) cover most changes, but MINC
-(MicroShift) — and Kind — have no OpenShift OAuth/SSO support, so neither
-can exercise SSO-, `OAuthClient`-, or real-cert-manager-issuance-related
+`make test` and the CI e2e suite (native MicroShift on Ubuntu, no nested
+containers) cover most changes, but MicroShift — and Kind — have no
+OpenShift OAuth/SSO support, so neither can exercise SSO-,
+`OAuthClient`-, or real-cert-manager-issuance-related
 code paths. Changes touching `internal/authbridge/`, TLS/cert-manager
 reconciliation, or `route.gatewayAPI` should also be validated against a
 real OpenShift cluster with cert-manager and SSO configured before merging:
@@ -50,8 +64,8 @@ Silicon produces an arm64 image that can't run on a real cluster's amd64
 nodes anyway.
 
 This is a hard requirement for changes in those areas at this stage of the
-project — MINC's blind spots have caused real regressions to land in
-reviewed, CI-green PRs before.
+project — MicroShift's blind spots (regardless of how it's run in CI) have
+caused real regressions to land in reviewed, CI-green PRs before.
 
 ### Promoting a build to staging
 
@@ -93,3 +107,19 @@ Sign off all commits (`git commit -s`).
 4. Use conventional commit messages (changelogs are generated automatically)
 5. Never include credentials, token names, robot accounts, or internal
    infrastructure details in PR descriptions, commits, or comments
+
+### Keeping a branch up to date
+
+Rebase on `main` rather than merging it in — this repo has no merge
+commits in its history and branch protection requires an up-to-date
+branch before merging anyway:
+
+```bash
+git fetch origin
+git rebase origin/main
+git push --force-with-lease
+```
+
+Squash fixup/review-feedback commits into their logical parent before
+final review, rather than leaving a trail of `fix: address review
+comment` commits.
