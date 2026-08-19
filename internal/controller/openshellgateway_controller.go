@@ -780,10 +780,37 @@ func (r *OpenShellGatewayReconciler) reconcileConfigMap(ctx context.Context, gw 
 
 // --- Deployment ---
 
+// ensureGatewayStatePVC provisions the small persistent volume the gateway
+// binary uses as its $HOME (see reconcileDeployment's "gateway-state" mount).
+// It has no writable filesystem otherwise, and since v0.0.106 it hard-requires
+// one to store its local credential-storage key-encryption key -- losing that
+// key on every pod restart would silently orphan any credentials already
+// encrypted with it, so this is a PVC (survives restarts), not an emptyDir.
+func (r *OpenShellGatewayReconciler) ensureGatewayStatePVC(ctx context.Context, gw *ogov1alpha1.OpenShellGateway, ns string) error {
+	pvc := &corev1.PersistentVolumeClaim{ObjectMeta: metav1.ObjectMeta{Name: gw.Name + "-state", Namespace: ns}}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pvc, func() error {
+		if pvc.CreationTimestamp.IsZero() { // PVC spec is immutable after creation
+			pvc.Labels = gatewayLabels(gw)
+			pvc.Spec = corev1.PersistentVolumeClaimSpec{
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+				Resources: corev1.VolumeResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+				},
+			}
+		}
+		return nil
+	})
+	return err
+}
+
 func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) error {
 	ns := gatewayNamespace(gw)
 	isOCP := openshift.IsOpenShift(r.DiscoveryClient)
 	tlsEnabled := gw.Spec.TLS.Enabled == nil || *gw.Spec.TLS.Enabled
+
+	if err := r.ensureGatewayStatePVC(ctx, gw, ns); err != nil {
+		return fmt.Errorf("ensure gateway state PVC: %w", err)
+	}
 
 	deploy := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: gw.Name, Namespace: ns}}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deploy, func() error {
@@ -815,15 +842,23 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 			Name:  "openshell-gateway",
 			Image: image,
 			Args:  []string{"--config", "/etc/openshell/gateway.toml"},
-			Env: []corev1.EnvVar{{
-				Name: "OPENSHELL_DB_URL",
-				ValueFrom: &corev1.EnvVarSource{
-					SecretKeyRef: &corev1.SecretKeySelector{
-						LocalObjectReference: corev1.LocalObjectReference{Name: databaseSecretName(gw)},
-						Key:                  "uri",
+			Env: []corev1.EnvVar{
+				{
+					Name: "OPENSHELL_DB_URL",
+					ValueFrom: &corev1.EnvVarSource{
+						SecretKeyRef: &corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: databaseSecretName(gw)},
+							Key:                  "uri",
+						},
 					},
 				},
-			}},
+				// The gateway's local credential-storage key-encryption key
+				// lives under $HOME regardless of OPENSHELL_DB_URL -- storing
+				// the key that decrypts DB-held secrets in that same DB would
+				// defeat the point of encrypting them. Needs a real, writable
+				// HOME; the container has none by default.
+				{Name: "HOME", Value: "/home/openshell"},
+			},
 			Ports: []corev1.ContainerPort{
 				{Name: "grpc", ContainerPort: 8080, Protocol: corev1.ProtocolTCP},
 				{Name: "health", ContainerPort: 8081, Protocol: corev1.ProtocolTCP},
@@ -845,6 +880,7 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "gateway-config", MountPath: "/etc/openshell", ReadOnly: true},
 				{Name: "sandbox-jwt", MountPath: "/etc/openshell-jwt", ReadOnly: true},
+				{Name: "gateway-state", MountPath: "/home/openshell"},
 			},
 			SecurityContext: &corev1.SecurityContext{
 				AllowPrivilegeEscalation: ptr.To(false),
@@ -872,6 +908,9 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 			}},
 			{Name: "auth-bridge-keys", VolumeSource: corev1.VolumeSource{
 				Secret: &corev1.SecretVolumeSource{SecretName: gw.Name + "-auth-bridge-keys", DefaultMode: ptr.To(int32(0400))},
+			}},
+			{Name: "gateway-state", VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: gw.Name + "-state"},
 			}},
 		}
 
