@@ -1,0 +1,83 @@
+name: Security Scan
+
+# Public repo accepting external contributions with no vulnerability
+# scanning gate before this workflow. Three checks: known-CVE scanning
+# for Go module dependencies (govulncheck), for the full filesystem
+# (Trivy, catches OS-level and non-Go findings too), and for the two
+# built container images. None of these touch runtime code, so the
+# usual SNO/RDU live-verification gate doesn't apply here.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Run govulncheck
+        uses: golang/govulncheck-action@032d45514ae346b1db93c04b0c90b841c370344f # v1.1.0
+        with:
+          go-version-file: go.mod
+
+  trivy-filesystem:
+    name: Trivy filesystem scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Run Trivy filesystem scan
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          ignore-unfixed: true
+
+  trivy-image:
+    name: "Trivy image scan (${{ matrix.image }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: ogo
+            containerfile: Containerfile
+          - image: ogo-auth-bridge
+            containerfile: Containerfile.auth-bridge
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Build image
+        # docker, not podman: matches the precedent already set in
+        # test-e2e-microshift-native.yml (CRI-O compatibility there;
+        # here it's because trivy-action's default scan path expects an
+        # image in the docker daemon's local store, not podman's).
+        # ci.yml/release.yml build the real published images with
+        # podman, but it's the same Containerfile either way -- the
+        # resulting layers and package versions are identical regardless
+        # of which tool built them, so this is scanning equivalent
+        # content.
+        run: docker build -f ${{ matrix.containerfile }} -t ${{ matrix.image }}:scan .
+
+      - name: Run Trivy image scan
+        uses: aquasecurity/trivy-action@a9c7b0f06e461e9d4b4d1711f154ee024b8d7ab8 # v0.36.0
+        with:
+          image-ref: "${{ matrix.image }}:scan"
+          severity: CRITICAL,HIGH
+          exit-code: 1
+          ignore-unfixed: true
