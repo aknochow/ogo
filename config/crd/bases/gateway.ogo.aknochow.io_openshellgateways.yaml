@@ -144,7 +144,7 @@ spec:
                 description: Image is the gateway container image.
                 type: string
               imageTag:
-                default: 0.0.97
+                default: 0.0.106
                 description: |-
                   ImageTag overrides the default image tag for gateway and supervisor containers.
                   Bare semver, no "v" prefix — NVIDIA tags ghcr.io/nvidia/openshell/{gateway,supervisor}
