@@ -11,5 +11,5 @@
 # syncs api/v1alpha1/openshellgateway_types.go's ImageTag kubebuilder default,
 # regenerates CRD manifests, and updates the docs.toml/README.md OpenShell
 # version badge in the same PR.
-FROM ghcr.io/nvidia/openshell/gateway:0.0.96
-FROM ghcr.io/nvidia/openshell/supervisor:0.0.96
+FROM ghcr.io/nvidia/openshell/gateway:0.0.97
+FROM ghcr.io/nvidia/openshell/supervisor:0.0.97
