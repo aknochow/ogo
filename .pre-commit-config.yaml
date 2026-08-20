@@ -1,0 +1,35 @@
+repos:
+  - repo: https://github.com/golangci/golangci-lint
+    rev: v2.12.2 # keep in sync with .github/workflows/lint.yml
+    hooks:
+      - id: golangci-lint
+        # Explicit version, not `system`: this hook builds golangci-lint
+        # FROM SOURCE (unlike CI's golangci-lint-action, which downloads
+        # a prebuilt release binary), and golangci-lint's own go.mod only
+        # requires go1.25.0 -- Go's toolchain auto-upgrade won't kick in
+        # to satisfy OUR go.mod's newer requirement while building a
+        # different module that doesn't need it. If your local base `go`
+        # is older than this repo's go.mod version (e.g. installed via
+        # Homebrew and not yet updated), `system` silently builds
+        # golangci-lint with that older toolchain, and it then refuses to
+        # analyze code targeting a newer Go version than it was built
+        # with ("the Go language version (go1.25) ... is lower than the
+        # targeted Go version"). Pin explicitly so this doesn't depend on
+        # whatever happens to be on a given machine's PATH -- bump this
+        # alongside go.mod's own version.
+        language_version: "1.26.0"
+
+  - repo: local
+    hooks:
+      - id: go-vet
+        name: go vet
+        entry: go vet ./...
+        language: system
+        pass_filenames: false
+        types: [go]
+      - id: go-build
+        name: go build
+        entry: go build ./...
+        language: system
+        pass_filenames: false
+        types: [go]

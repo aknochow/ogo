@@ -1,0 +1,105 @@
+name: Upstream Smoke Test
+
+# Regression test for a specific bug class: v0.0.88 of the NVIDIA OpenShell
+# gateway rejected `enable_bind_mounts`, a field that had previously been
+# accepted -- a config-schema regression that wasn't caught until it hit a
+# real deploy, because upstream-sync.yml's own PR only tests that the
+# CRD/manifests/docs sync succeeded, never that the new gateway binary
+# still accepts the config OGO actually generates for it.
+#
+# Deliberately narrow: this is NOT general e2e/smoke coverage (that's
+# test-e2e-microshift-native.yml's job) and does NOT stand up a real
+# Kubernetes cluster. It renders OGO's actual gateway.toml (via
+# hack/smoke-test-config, which calls the same RenderGatewayTOML function
+# the controller uses in production) and runs the candidate gateway image
+# against it directly, checking only whether config PARSING/VALIDATION
+# succeeds -- confirmed by direct testing that this reaches "Using compute
+# driver driver=kubernetes" before failing on the (expected, out of scope)
+# lack of real cluster connectivity. A field-rejection regression fails
+# earlier, before the server ever attempts to bind, with a distinct
+# "configuration error" -- that's the one signal this test gates on.
+#
+# Runs unprivileged (no PAT_TOKEN, no elevated permissions), independent of
+# upstream-sync.yml's security-sensitive `sync` job -- it only needs to
+# read the (by then already-synced) pin file, not write anything.
+
+on:
+  pull_request:
+    paths:
+      - 'hack/openshell-pins/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke-test:
+    name: Gateway config compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Extract the candidate gateway tag
+        id: tag
+        run: |
+          TAG=$(grep -oP 'openshell/gateway:\K\S+' hack/openshell-pins/Dockerfile)
+          if [ -z "${TAG}" ]; then
+            echo "Could not extract a gateway tag from hack/openshell-pins/Dockerfile" >&2
+            exit 1
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Render a representative gateway.toml + JWT keys
+        run: go run ./hack/smoke-test-config .smoke-test-tmp
+
+      - name: Run the candidate gateway against it
+        env:
+          GATEWAY_IMAGE: "ghcr.io/nvidia/openshell/gateway:${{ steps.tag.outputs.tag }}"
+        run: |
+          docker run -d --name smoke-test-gateway \
+            --user 1000:1000 \
+            -e HOME=/tmp \
+            -e OPENSHELL_DRIVERS=kubernetes \
+            -v "$(pwd)/.smoke-test-tmp/gateway.toml:/config.toml:ro" \
+            -v "$(pwd)/.smoke-test-tmp/jwt:/etc/openshell-jwt:ro" \
+            "${GATEWAY_IMAGE}" \
+            --config /config.toml
+
+          for i in $(seq 1 30); do
+            LOGS=$(docker logs smoke-test-gateway 2>&1)
+            if echo "${LOGS}" | grep -qE "configuration error|Starting OpenShell server"; then
+              break
+            fi
+            sleep 1
+          done
+
+          echo "=== gateway logs ==="
+          echo "${LOGS}"
+
+          if echo "${LOGS}" | grep -q "configuration error"; then
+            echo "" >&2
+            echo "FAIL: ${GATEWAY_IMAGE} rejected the config OGO renders (the exact bug class this test exists to catch)" >&2
+            exit 1
+          fi
+
+          if ! echo "${LOGS}" | grep -q "Starting OpenShell server"; then
+            echo "" >&2
+            echo "FAIL: ${GATEWAY_IMAGE} never reached startup -- unexpected failure mode, investigate the log above" >&2
+            exit 1
+          fi
+
+          echo "PASS: ${GATEWAY_IMAGE} accepted the config OGO renders"
+
+      - name: Collect logs on failure
+        if: failure()
+        run: docker logs smoke-test-gateway 2>&1 || true
+
+      - name: Cleanup
+        if: always()
+        run: docker rm -f smoke-test-gateway 2>/dev/null || true
