@@ -104,20 +104,9 @@ rather than trying to share PVCs across namespace boundaries.
 ### Authentication for non-interactive callers
 
 A CI pipeline step or controller creating sandboxes non-interactively needs
-a supported auth path — the same two options documented in
-[Authentication](../concepts/authentication.md):
-
-- **mTLS** — works today, no extra setup. Extract the gateway's client
-  certificate and use it with `openshell gateway add ... --local` or
-  `--remote` (see the mTLS section of the Authentication doc).
-- **ServiceAccount identity** — as of
-  [`OpenShellWorkspaceMember`](../concepts/workspace-membership.md)
-  (shipped v0.3.0), a Kubernetes ServiceAccount in the same namespace as
-  the gateway can be granted workspace membership declaratively, letting a
-  CI pipeline authenticate as its own ServiceAccount instead of
-  distributing a shared mTLS client certificate. See the
-  [sample CR](https://github.com/aknochow/ogo/tree/main/config/samples) for
-  a `ci-pipeline`-style grant.
+a supported auth path — see
+[CI/CD Pipeline Access](cicd-access.md) for the full setup (ServiceAccount +
+`OpenShellWorkspaceMember`, or mTLS as a simpler alternative).
 
 ### RWO scheduling
 
