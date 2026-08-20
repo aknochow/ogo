@@ -71,10 +71,15 @@ jobs:
             "${GATEWAY_IMAGE}" \
             --config /config.toml
 
-          sleep 5
+          for i in $(seq 1 30); do
+            LOGS=$(docker logs smoke-test-gateway 2>&1)
+            if echo "${LOGS}" | grep -qE "configuration error|Starting OpenShell server"; then
+              break
+            fi
+            sleep 1
+          done
 
           echo "=== gateway logs ==="
-          LOGS=$(docker logs smoke-test-gateway 2>&1)
           echo "${LOGS}"
 
           if echo "${LOGS}" | grep -q "configuration error"; then

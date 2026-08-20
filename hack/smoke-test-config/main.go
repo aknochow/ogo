@@ -54,7 +54,7 @@ func main() {
 	}
 	outDir := os.Args[1]
 
-	tlsDisabled := false
+	tlsEnabled := false
 	gw := &ogov1alpha1.OpenShellGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "smoke-test"},
 		Spec: ogov1alpha1.OpenShellGatewaySpec{
@@ -63,7 +63,7 @@ func main() {
 				AllowUnauthenticated: true,
 			},
 			TLS: ogov1alpha1.TLSSpec{
-				Enabled: &tlsDisabled,
+				Enabled: &tlsEnabled,
 			},
 			Sandbox: ogov1alpha1.SandboxSpec{
 				// Populate every optional field RenderGatewayTOML
@@ -100,14 +100,18 @@ func main() {
 		fmt.Fprintln(os.Stderr, "mkdir jwt dir:", err)
 		os.Exit(1)
 	}
-	writes := map[string][]byte{
-		"signing.pem": keys.SigningKey,
-		"public.pem":  keys.PublicKey,
-		"kid":         []byte(keys.KID),
+	writes := []struct {
+		name    string
+		content []byte
+		perm    os.FileMode
+	}{
+		{"signing.pem", keys.SigningKey, 0o600}, // private key
+		{"public.pem", keys.PublicKey, 0o644},
+		{"kid", []byte(keys.KID), 0o644},
 	}
-	for name, content := range writes {
-		if err := os.WriteFile(filepath.Join(jwtDir, name), content, 0o644); err != nil {
-			fmt.Fprintf(os.Stderr, "write %s: %v\n", name, err)
+	for _, w := range writes {
+		if err := os.WriteFile(filepath.Join(jwtDir, w.name), w.content, w.perm); err != nil {
+			fmt.Fprintf(os.Stderr, "write %s: %v\n", w.name, err)
 			os.Exit(1)
 		}
 	}
