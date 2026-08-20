@@ -71,6 +71,7 @@ img   = "https://img.shields.io/badge/OpenShell-v0.0.106-76b900?logo=nvidia&logo
   { "OpenShift SSO" = "guides/openshift-sso.md" },
   { "Dev Spaces" = "guides/devspaces.md" },
   { "Shared Volumes" = "guides/shared-volumes.md" },
+  { "CI/CD Pipeline Access" = "guides/cicd-access.md" },
 ]
 
 [[project.nav]]
