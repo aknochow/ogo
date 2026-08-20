@@ -548,6 +548,57 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		Expect(container.Image).To(ContainSubstring("openshell/gateway"))
 	})
 
+	It("should not append imageTag onto a digest-pinned image", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		const digestImage = "ghcr.io/nvidia/openshell/gateway@sha256:1111111111111111111111111111111111111111111111111111111111111111"
+		gw.Spec.Image = digestImage
+		gw.Spec.ImageTag = "0.0.92"
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+
+		// Regression test for the RDU incident (2026-08-03): concatenating
+		// a non-empty imageTag onto an already digest-pinned image produced
+		// "image@sha256:...:tag", an invalid OCI reference Kubernetes
+		// rejects as InvalidImageName.
+		Expect(r.reconcileDeployment(ctx, gw)).To(Succeed())
+
+		deploy := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, deploy)).To(Succeed())
+		Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal(digestImage))
+
+		condition := meta.FindStatusCondition(gw.Status.Conditions, ogov1alpha1.ConditionImageConfigValid)
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+		Expect(condition.Reason).To(Equal("ImageTagIgnored"))
+	})
+
+	It("should append imageTag onto a non-digest image", func() {
+		r := reconciler()
+		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})
+
+		gw := &ogov1alpha1.OpenShellGateway{}
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+		gw.Spec.Image = "ghcr.io/nvidia/openshell/gateway"
+		gw.Spec.ImageTag = "0.0.92"
+		Expect(k8sClient.Update(ctx, gw)).To(Succeed())
+		Expect(k8sClient.Get(ctx, gwKey, gw)).To(Succeed())
+
+		Expect(r.reconcileDeployment(ctx, gw)).To(Succeed())
+
+		deploy := &appsv1.Deployment{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, deploy)).To(Succeed())
+		Expect(deploy.Spec.Template.Spec.Containers[0].Image).To(Equal("ghcr.io/nvidia/openshell/gateway:0.0.92"))
+
+		condition := meta.FindStatusCondition(gw.Status.Conditions, ogov1alpha1.ConditionImageConfigValid)
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+		Expect(condition.Reason).To(Equal("OK"))
+	})
+
 	It("should mount TLS volumes when TLS enabled", func() {
 		r := reconciler()
 		_, _ = r.Reconcile(ctx, reconcile.Request{NamespacedName: gwKey})

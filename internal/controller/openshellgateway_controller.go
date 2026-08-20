@@ -834,9 +834,30 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 		if image == "" {
 			image = "ghcr.io/nvidia/openshell/gateway"
 		}
-		if gw.Spec.ImageTag != "" {
-			image = image + ":" + gw.Spec.ImageTag
+
+		// A digest reference is already fully pinned; appending imageTag
+		// would produce an invalid "image@sha256:...:tag" reference that
+		// Kubernetes rejects as InvalidImageName. That combination stuck a
+		// Deployment silently for 9 hours on RDU (2026-08-03) with
+		// Available still True on the old ReplicaSet - surface the ignored
+		// tag via ConditionImageConfigValid instead of dropping it with no
+		// trace.
+		imageConfigCondition := metav1.Condition{
+			Type: ogov1alpha1.ConditionImageConfigValid, Status: metav1.ConditionTrue, Reason: "OK",
 		}
+		if gw.Spec.ImageTag != "" {
+			if strings.Contains(image, "@") {
+				imageConfigCondition = metav1.Condition{
+					Type: ogov1alpha1.ConditionImageConfigValid, Status: metav1.ConditionFalse,
+					Reason: "ImageTagIgnored",
+					Message: fmt.Sprintf("spec.imageTag %q is ignored because spec.image is already digest-pinned (%s)",
+						gw.Spec.ImageTag, image),
+				}
+			} else {
+				image = image + ":" + gw.Spec.ImageTag
+			}
+		}
+		meta.SetStatusCondition(&gw.Status.Conditions, imageConfigCondition)
 
 		container := corev1.Container{
 			Name:  "openshell-gateway",
@@ -1783,6 +1804,7 @@ func (r *OpenShellGatewayReconciler) updateStatus(ctx context.Context, gw *ogov1
 		ogov1alpha1.ConditionOpenShiftGroups,
 		ogov1alpha1.ConditionEnvoyRouteReady,
 		ogov1alpha1.ConditionBrowserSSOReady,
+		ogov1alpha1.ConditionImageConfigValid,
 	} {
 		if condType == ogov1alpha1.ConditionEnvoyRouteReady && !envoyRouteActive {
 			continue
