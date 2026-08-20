@@ -204,6 +204,24 @@ jobs:
           insecure = true
           EOF
 
+      - name: Configure apt to fail fast on a slow mirror
+        # azure.archive.ubuntu.com (the runner's preferred mirror) is
+        # sometimes slow to fail rather than erroring outright -- apt still
+        # falls through to archive.ubuntu.com and succeeds, but burns 2+
+        # minutes doing so every single `apt-get update` call install.sh
+        # makes internally. Across 3 consecutive real runs that alone was
+        # enough to blow every attempt's 300s budget before the actual
+        # install work got a chance to run. Force short per-request
+        # timeouts and no retries so a bad mirror gets skipped in seconds,
+        # not minutes -- applies to every apt-get call system-wide,
+        # including the ones install.sh makes internally.
+        run: |
+          cat <<'EOF' | sudo tee /etc/apt/apt.conf.d/99-ci-fast-fail
+          Acquire::Retries "0";
+          Acquire::http::Timeout "10";
+          Acquire::https::Timeout "10";
+          EOF
+
       - name: Install MicroShift (DEB, native — no nested containers)
         working-directory: microshift-io
         # install.sh's install_crio()/install_ctl_tools() call `curl -fsSL`
