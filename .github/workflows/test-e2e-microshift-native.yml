@@ -352,11 +352,33 @@ jobs:
         #
         # "Wait for cluster ready" above only waits on node Ready, which
         # says nothing about whether the openshift-dns DaemonSet has
-        # actually scheduled/started its pod yet -- an earlier version of
-        # this workflow hit that race directly (dns-default sitting at
-        # ContainerCreating with zero Service endpoints), so wait on the
-        # DNS pod specifically before probing it.
+        # actually scheduled/started its pod yet. kubectl wait
+        # --for=condition=Ready fails immediately with "no matching
+        # resources found" if the selector matches nothing, so wait for
+        # the pod to be *created* before waiting for Ready. Observed
+        # 2026-09-10 on main (#88): node Ready, node-resolver Running,
+        # dns-default not created yet; wait bailed in ~100ms, then
+        # failure diagnostics showed dns-default at ContainerCreating
+        # AGE 0s.
         run: |
+          echo "Waiting for openshift-dns DaemonSet pod to be created..."
+          for i in $(seq 1 60); do
+            if kubectl get pod -n openshift-dns \
+                 -l dns.operator.openshift.io/daemonset-dns=default \
+                 --no-headers 2>/dev/null | grep -q .; then
+              break
+            fi
+            echo "dns-default pod not created yet ($i/60)"
+            sleep 2
+          done
+          if ! kubectl get pod -n openshift-dns \
+               -l dns.operator.openshift.io/daemonset-dns=default \
+               --no-headers 2>/dev/null | grep -q .; then
+            echo "ERROR: dns-default pod never appeared" >&2
+            kubectl get pods -n openshift-dns -o wide || true
+            exit 1
+          fi
+
           echo "Waiting for openshift-dns pod to be Ready..."
           kubectl wait --for=condition=Ready pod \
             -n openshift-dns -l dns.operator.openshift.io/daemonset-dns=default \
