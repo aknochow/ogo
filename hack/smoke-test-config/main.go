@@ -105,7 +105,15 @@ func main() {
 		content []byte
 		perm    os.FileMode
 	}{
-		{"signing.pem", keys.SigningKey, 0o600}, // private key
+		// World-readable on purpose: this is an ephemeral throwaway key
+		// generated fresh each CI run, and the smoke test bind-mounts it into
+		// a gateway container running as an unprivileged non-root uid
+		// (--user 1000:1000) that does not own this file. Newer gateway
+		// versions read the sandbox JWT signing key eagerly at startup, so an
+		// owner-only 0o600 file yields "Permission denied", which the harness
+		// would misreport as a config-schema rejection. 0o644 lets the
+		// container uid read it regardless of owner.
+		{"signing.pem", keys.SigningKey, 0o644},
 		{"public.pem", keys.PublicKey, 0o644},
 		{"kid", []byte(keys.KID), 0o644},
 	}
