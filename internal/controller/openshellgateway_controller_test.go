@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -31,7 +32,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ogov1alpha1 "github.com/aknochow/ogo/api/v1alpha1"
@@ -219,6 +223,56 @@ var _ = Describe("OpenShellGateway Controller", func() {
 		Expect(deploy.Spec.Template.Spec.Containers).To(HaveLen(1))
 		Expect(deploy.Spec.Template.Spec.Containers[0].Name).To(Equal("openshell-gateway"))
 		Expect(deploy.Spec.Template.Annotations).To(HaveKey("ogo.aknochow.io/config-hash"))
+	})
+
+	It("should roll the Deployment when the database Secret changes", func() {
+		mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+			Scheme:                 scheme.Scheme,
+			Metrics:                metricsserver.Options{BindAddress: "0"},
+			HealthProbeBindAddress: "0",
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		r := &OpenShellGatewayReconciler{
+			Client:          mgr.GetClient(),
+			Scheme:          mgr.GetScheme(),
+			DiscoveryClient: fake.NewSimpleClientset().Discovery(),
+		}
+		Expect(r.SetupWithManager(mgr)).To(Succeed())
+
+		managerCtx, cancelManager := context.WithCancel(ctx)
+		managerErr := make(chan error, 1)
+		go func() {
+			managerErr <- mgr.Start(managerCtx)
+		}()
+		DeferCleanup(func() {
+			cancelManager()
+			Eventually(managerErr, 10*time.Second).Should(Receive(BeNil()))
+		})
+
+		Eventually(func() bool {
+			return mgr.GetCache().WaitForCacheSync(managerCtx)
+		}, 10*time.Second, 100*time.Millisecond).Should(BeTrue())
+
+		configHash := func() string {
+			deploy := &appsv1.Deployment{}
+			if err := k8sClient.Get(ctx, types.NamespacedName{Name: gwName, Namespace: "ogo-test"}, deploy); err != nil {
+				return ""
+			}
+			return deploy.Spec.Template.Annotations["ogo.aknochow.io/config-hash"]
+		}
+		Eventually(configHash, 30*time.Second, 250*time.Millisecond).ShouldNot(BeEmpty())
+		initialHash := configHash()
+
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{Name: "test-pg-uri", Namespace: "ogo-test"}, secret)).To(Succeed())
+		secret.Data["uri"] = []byte("postgresql://rotated:rotated@localhost:5432/test")
+		Expect(k8sClient.Update(ctx, secret)).To(Succeed())
+
+		Eventually(func() bool {
+			updatedHash := configHash()
+			return updatedHash != "" && updatedHash != initialHash
+		}, 30*time.Second, 250*time.Millisecond).Should(BeTrue())
 	})
 
 	It("should not report Available while the Envoy Route isn't ready, even with pods Ready", func() {

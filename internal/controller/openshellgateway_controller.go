@@ -828,7 +828,16 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 		if authBridgeEnabled(gw, isOCP) {
 			oidcIssuer = authBridgeInternalURL(gw)
 		}
-		configHash := computeConfigHash(gateway.RenderGatewayTOML(gw, sandboxNamespace(gw), oidcIssuer))
+		databaseSecretRevision, err := r.databaseSecretRevision(ctx, gw)
+		if err != nil {
+			return fmt.Errorf("get database secret revision: %w", err)
+		}
+		configHashInput := gateway.RenderGatewayTOML(gw, sandboxNamespace(gw), oidcIssuer)
+		// OPENSHELL_DB_URL is injected through a SecretKeyRef, so a Secret
+		// update or recreation would otherwise leave the running pod with a
+		// stale database URL until it is restarted manually.
+		configHashInput += "\ndatabase_secret_revision=" + databaseSecretRevision
+		configHash := computeConfigHash(configHashInput)
 
 		image := gw.Spec.Image
 		if image == "" {
@@ -1056,6 +1065,22 @@ func (r *OpenShellGatewayReconciler) reconcileDeployment(ctx context.Context, gw
 		return nil
 	})
 	return err
+}
+
+// databaseSecretRevision returns metadata only; the credential itself must
+// never be copied into the pod template or its annotations. ResourceVersion
+// changes on updates, and UID changes when a Secret is recreated.
+func (r *OpenShellGatewayReconciler) databaseSecretRevision(ctx context.Context, gw *ogov1alpha1.OpenShellGateway) (string, error) {
+	secretName := databaseSecretName(gw)
+	if secretName == "" {
+		return "", nil
+	}
+
+	secret := &corev1.Secret{}
+	if err := r.Get(ctx, types.NamespacedName{Name: secretName, Namespace: gatewayNamespace(gw)}, secret); err != nil {
+		return "", err
+	}
+	return string(secret.UID) + "/" + secret.ResourceVersion, nil
 }
 
 // --- Service ---
@@ -1862,11 +1887,13 @@ func (r *OpenShellGatewayReconciler) dependencies() []DependencyReconciler {
 
 func (r *OpenShellGatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	labelMatcher := handler.EnqueueRequestsFromMapFunc(r.findGatewayForManagedResource)
+	databaseSecretMatcher := handler.EnqueueRequestsFromMapFunc(r.findGatewaysForDatabaseSecret)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&ogov1alpha1.OpenShellGateway{}).
 		Watches(&appsv1.Deployment{}, labelMatcher).
 		Watches(&corev1.Service{}, labelMatcher).
 		Watches(&corev1.ConfigMap{}, labelMatcher).
+		Watches(&corev1.Secret{}, databaseSecretMatcher).
 		Named("openshellgateway").
 		Complete(r)
 }
@@ -1881,6 +1908,25 @@ func (r *OpenShellGatewayReconciler) findGatewayForManagedResource(ctx context.C
 		return nil
 	}
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: name}}}
+}
+
+func (r *OpenShellGatewayReconciler) findGatewaysForDatabaseSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	gateways := &ogov1alpha1.OpenShellGatewayList{}
+	if err := r.List(ctx, gateways); err != nil {
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(gateways.Items))
+	for i := range gateways.Items {
+		gw := &gateways.Items[i]
+		if gatewayNamespace(gw) != obj.GetNamespace() || databaseSecretName(gw) != obj.GetName() {
+			continue
+		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: gw.Name},
+		})
+	}
+	return requests
 }
 
 // --- Helpers ---
