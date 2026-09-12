@@ -2,7 +2,7 @@ name: CodeQL
 
 # Go SAST via CodeQL. Complements security-scan.yml (govulncheck + Trivy),
 # which covers known CVEs in modules and images; this catches insecure
-# patterns in our own code. First findings may be empty — that is fine.
+# CodeQL reports Go static-analysis findings through GitHub code scanning.
 
 on:
   push:
