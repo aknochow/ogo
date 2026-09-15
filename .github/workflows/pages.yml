@@ -6,13 +6,12 @@ on:
     paths:
       - 'docs/**'
       - 'scripts/ogo-docs.py'
+      - 'scripts/docs-requirements.txt'
       - 'docs.toml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
@@ -22,6 +21,9 @@ jobs:
   build:
     name: Build docs
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -30,7 +32,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install markdown==3.7 tomli==2.2.1 pygments==2.19.1
+        run: pip install --require-hashes -r scripts/docs-requirements.txt
 
       - name: Build docs
         run: python3 scripts/ogo-docs.py
@@ -43,6 +45,9 @@ jobs:
     name: Deploy to GitHub Pages
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

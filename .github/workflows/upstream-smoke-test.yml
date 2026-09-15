@@ -28,6 +28,9 @@ on:
     paths:
       - 'hack/openshell-pins/**'
 
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -45,22 +48,22 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Extract the candidate gateway tag
+      - name: Extract the candidate gateway image
         id: tag
         run: |
-          TAG=$(grep -oP 'openshell/gateway:\K\S+' hack/openshell-pins/Dockerfile)
-          if [ -z "${TAG}" ]; then
-            echo "Could not extract a gateway tag from hack/openshell-pins/Dockerfile" >&2
+          IMAGE=$(grep -oP 'FROM \K\S*openshell/gateway:\S+' hack/openshell-pins/Dockerfile)
+          if [ -z "${IMAGE}" ]; then
+            echo "Could not extract a gateway image from hack/openshell-pins/Dockerfile" >&2
             exit 1
           fi
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "image=${IMAGE}" >> "$GITHUB_OUTPUT"
 
       - name: Render a representative gateway.toml + JWT keys
         run: go run ./hack/smoke-test-config .smoke-test-tmp
 
       - name: Run the candidate gateway against it
         env:
-          GATEWAY_IMAGE: "ghcr.io/nvidia/openshell/gateway:${{ steps.tag.outputs.tag }}"
+          GATEWAY_IMAGE: ${{ steps.tag.outputs.image }}
         run: |
           docker run -d --name smoke-test-gateway \
             --user 1000:1000 \
