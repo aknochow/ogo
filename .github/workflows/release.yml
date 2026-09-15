@@ -5,6 +5,9 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: read
+
 env:
   IMAGE_BASE: quay.io/aknochow
   GHCR_BASE: ghcr.io/aknochow
