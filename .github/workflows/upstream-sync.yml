@@ -18,13 +18,14 @@ name: Upstream Sync
 #
 # Uses pull_request_target (not pull_request) because Dependabot PRs get a
 # read-only GITHUB_TOKEN under the normal pull_request trigger, and this
-# workflow needs write access to push the sync commit back. The security
-# boundary is the sync job's own `if:` condition (github.actor ==
-# 'dependabot[bot]' AND the head ref starts with 'dependabot/'), enforced
-# before the checkout step or anything else runs - not which ref gets
-# checked out. Both signals would need to be spoofed simultaneously (actor
-# identity can't be forged by a PR author) for an attacker to reach the
-# `make manifests` step with a malicious checkout.
+# workflow needs write access to push the sync commit back. Privileged
+# work runs against the trusted base checkout only: the PR's pin file is
+# fetched as data via the API (never `actions/checkout` of
+# pull_request.head.sha, which Scorecard flags as Dangerous-Workflow).
+# `make manifests` therefore never runs against untrusted workflow files
+# or Makefiles from the PR. The job-level `if:` (github.actor ==
+# 'dependabot[bot]' AND the head ref starts with 'dependabot/') is still
+# required so a random contributor cannot feed this job a pin file.
 
 on:
   pull_request_target:
@@ -36,16 +37,18 @@ on:
     paths:
       - 'hack/openshell-pins/**'
 
+permissions:
+  contents: read
+
 jobs:
   sync:
     # Restricted to Dependabot's own actor identity AND a dependabot/*
-    # branch name, checked here at the job level so neither the checkout
-    # nor `make manifests` (arbitrary Go tooling) ever runs against
-    # anything else. github.actor can't be spoofed by a PR author, unlike
-    # file contents - without this, any contributor to this public repo
-    # could open a PR touching hack/openshell-pins/** and get this job to
-    # check out their branch and run arbitrary code with PAT_TOKEN's write
-    # access.
+    # branch name, checked here at the job level so neither the pin-file
+    # fetch nor `make manifests` (Go tooling) ever runs against anything
+    # else. github.actor can't be spoofed by a PR author, unlike file
+    # contents - without this, any contributor to this public repo could
+    # open a PR touching hack/openshell-pins/** and get this job to run
+    # with PAT_TOKEN's write access.
     if: >-
       github.event_name == 'pull_request_target' &&
       github.actor == 'dependabot[bot]' &&
@@ -55,30 +58,40 @@ jobs:
       contents: write
 
     steps:
-      # Checks out the PR head directly (not main) - checking out main and
-      # writing just the pin file's content back was tried and reverted:
-      # pushing that tree with --force-with-lease replaces the Dependabot
-      # branch's history with one rooted on main instead of Dependabot's
-      # own commit, which only happens to work when main hasn't moved
-      # since the PR opened. The job-level actor + branch-name guards above
-      # (enforced before this or any other step runs) are the actual
-      # security boundary here, not which ref gets checked out.
-      - name: Checkout PR head
+      # pull_request_target defaults to the base branch (trusted). Do not
+      # pass pull_request.head.sha to actions/checkout — that is the
+      # Dangerous-Workflow pattern Scorecard flags, and it would also
+      # execute the PR's Makefile/scripts under PAT_TOKEN.
+      - name: Checkout base (trusted)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
-          token: ${{ secrets.PAT_TOKEN }}
+          persist-credentials: false
 
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
+      - name: Fetch pin file from the Dependabot PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! echo "${HEAD_SHA}" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "HEAD_SHA is not a 40-char hex SHA - refusing"
+            exit 1
+          fi
+          gh api -H "Accept: application/vnd.github.raw" \
+            "/repos/${GITHUB_REPOSITORY}/contents/hack/openshell-pins/Dockerfile?ref=${HEAD_SHA}" \
+            > hack/openshell-pins/Dockerfile
+          grep -q 'openshell/gateway:' hack/openshell-pins/Dockerfile
+          grep -q 'openshell/supervisor:' hack/openshell-pins/Dockerfile
+
       - name: Extract and validate pinned versions
         id: versions
         run: |
-          GATEWAY_TAG=$(grep -oP 'openshell/gateway:\K\S+' hack/openshell-pins/Dockerfile)
-          SUPERVISOR_TAG=$(grep -oP 'openshell/supervisor:\K\S+' hack/openshell-pins/Dockerfile)
+          GATEWAY_TAG=$(grep -oP 'openshell/gateway:\K[0-9]+\.[0-9]+\.[0-9]+' hack/openshell-pins/Dockerfile)
+          SUPERVISOR_TAG=$(grep -oP 'openshell/supervisor:\K[0-9]+\.[0-9]+\.[0-9]+' hack/openshell-pins/Dockerfile)
           for TAG in "${GATEWAY_TAG}" "${SUPERVISOR_TAG}"; do
             if ! echo "${TAG}" | grep -qP '^\d+\.\d+\.\d+$'; then
               echo "tag '${TAG}' is not bare semver (X.Y.Z) - refusing to use it in sed/git commands"
@@ -128,22 +141,70 @@ jobs:
           NEW_VERSION: ${{ steps.versions.outputs.new_version }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PAT_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
           if ! echo "${HEAD_REF}" | grep -qP '^[a-zA-Z0-9/_.-]+$'; then
             echo "unexpected characters in HEAD_REF '${HEAD_REF}' - refusing to use it"
             exit 1
           fi
+          if ! echo "${HEAD_SHA}" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "HEAD_SHA is not a 40-char hex SHA - refusing"
+            exit 1
+          fi
+          if [ -z "${PAT_TOKEN}" ]; then
+            echo "PAT_TOKEN is empty - refusing to push"
+            exit 1
+          fi
+
+          # Snapshot only the files this job is allowed to write (keep in
+          # sync with the tag job allowlist below). Generated on the
+          # trusted base tree; copied onto Dependabot's commit afterwards.
+          SYNC_DIR=$(mktemp -d)
+          for path in \
+            hack/openshell-pins/Dockerfile \
+            api/v1alpha1/openshellgateway_types.go \
+            docs.toml \
+            README.md
+          do
+            mkdir -p "${SYNC_DIR}/$(dirname "${path}")"
+            cp "${path}" "${SYNC_DIR}/${path}"
+          done
+          mkdir -p "${SYNC_DIR}/config/crd/bases" "${SYNC_DIR}/bundle/manifests"
+          cp -a config/crd/bases/. "${SYNC_DIR}/config/crd/bases/"
+          cp -a bundle/manifests/. "${SYNC_DIR}/bundle/manifests/"
+
+          git config --local http.https://github.com/.extraheader "AUTHORIZATION: bearer ${PAT_TOKEN}"
+          git fetch --no-recurse-submodules origin "${HEAD_REF}"
+          # Disable hooks/smudge filters from the fetched tree; we will not
+          # run make or any PR scripts after this point.
+          git -c core.hooksPath=/dev/null -c core.attributesFile=/dev/null \
+            checkout --force -B pr-head FETCH_HEAD
+          if [ "$(git rev-parse HEAD)" != "${HEAD_SHA}" ]; then
+            echo "PR branch HEAD $(git rev-parse HEAD) != expected ${HEAD_SHA} - refusing to push"
+            exit 1
+          fi
+
+          cp "${SYNC_DIR}/hack/openshell-pins/Dockerfile" hack/openshell-pins/Dockerfile
+          cp "${SYNC_DIR}/api/v1alpha1/openshellgateway_types.go" api/v1alpha1/openshellgateway_types.go
+          cp "${SYNC_DIR}/docs.toml" docs.toml
+          cp "${SYNC_DIR}/README.md" README.md
+          cp -a "${SYNC_DIR}/config/crd/bases/." config/crd/bases/
+          cp -a "${SYNC_DIR}/bundle/manifests/." bundle/manifests/
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A
+          git add \
+            hack/openshell-pins/Dockerfile \
+            api/v1alpha1/openshellgateway_types.go \
+            docs.toml \
+            README.md \
+            config/crd/bases \
+            bundle/manifests
           git diff --cached --quiet && exit 0
           git commit -m "chore(openshell): sync ImageTag default and docs badge to ${NEW_VERSION}"
-          # Explicit expected-SHA form: the checkout above is a bare SHA
-          # (detached HEAD), which may not set up a refs/remotes/origin/*
-          # tracking ref for --force-with-lease's default comparison to
-          # use - stating HEAD_SHA explicitly needs no tracking ref and
-          # still fails safely if the branch moved since checkout.
-          git push --force-with-lease="${HEAD_REF}:${HEAD_SHA}" origin "HEAD:${HEAD_REF}"
+          # Fast-forward only: if Dependabot pushed again, this fails
+          # instead of rewriting their branch.
+          git push origin "HEAD:${HEAD_REF}"
 
   tag:
     if: github.event_name == 'push'
